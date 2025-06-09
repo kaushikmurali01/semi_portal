@@ -1,0 +1,38 @@
+2025-06-02 12:42:00,756 - semgrep.notifications - WARNING - METRICS: Using configs from the Registry (like --config=p/ci) reports pseudonymous rule metrics to semgrep.dev.
+To disable Registry rule metrics, use "--metrics=off".
+Using configs only from local files (like --config=xyz.yml) does not enable metrics.
+
+More information: https://semgrep.dev/docs/metrics
+
+2025-06-02 12:42:00,757 - semgrep.run_scan - DEBUG - semgrep version 1.2.0
+2025-06-02 12:42:00,760 - semgrep.git - DEBUG - Failed to get project url from 'git ls-remote': Command failed with exit code: 128
+-----
+Command failed with output:
+fatal: No remote configured to list refs from.
+
+
+Failed to run 'git ls-remote --get-url'. Possible reasons:
+
+- the git binary is not available
+- the current working directory is not a git repository
+- the baseline commit is not a parent of the current commit
+    (if you are running through semgrep-app, check if you are setting `SEMGREP_BRANCH` or `SEMGREP_BASELINE_COMMIT` properly)
+- the current working directory is not marked as safe
+    (fix with `git config --global --add safe.directory $(pwd)`)
+
+Try running the command yourself to debug the issue.
+2025-06-02 12:42:00,761 - semgrep.config_resolver - DEBUG - Loading local config from /home/runner/workspace/.config/.semgrep/semgrep_rules.json
+2025-06-02 12:42:00,763 - semgrep.config_resolver - DEBUG - Done loading local config from /home/runner/workspace/.config/.semgrep/semgrep_rules.json
+2025-06-02 12:42:00,765 - semgrep.config_resolver - DEBUG - Saving rules to /tmp/semgrep-zfknj609.rules
+2025-06-02 12:42:00,918 - semgrep.semgrep_core - DEBUG - Failed to open resource semgrep-core-proprietary: [Errno 2] No such file or directory: '/tmp/_MEIIeooEz/semgrep/bin/semgrep-core-proprietary'.
+2025-06-02 12:42:01,383 - semgrep.rule_lang - DEBUG - semgrep-core validation response: valid=True
+2025-06-02 12:42:01,384 - semgrep.rule_lang - DEBUG - semgrep-core validation succeeded
+2025-06-02 12:42:01,384 - semgrep.rule_lang - DEBUG - RPC validation succeeded
+2025-06-02 12:42:01,384 - semgrep.config_resolver - DEBUG - loaded 1 configs in 0.6234664916992188
+2025-06-02 12:42:01,469 - semgrep.run_scan - VERBOSE - running 711 rules from 1 config /home/runner/workspace/.config/.semgrep/semgrep_rules.json_0
+2025-06-02 12:42:01,469 - semgrep.run_scan - VERBOSE - No .semgrepignore found. Using default .semgrepignore rules. See the docs for the list of default ignores: https://semgrep.dev/docs/cli-usage/#ignore-files
+2025-06-02 12:42:01,471 - semgrep.run_scan - VERBOSE - Rules:
+2025-06-02 12:42:01,471 - semgrep.run_scan - VERBOSE - <SKIPPED DATA (too many entries; use --max-log-list-entries)>
+2025-06-02 12:42:02,336 - semgrep.core_runner - DEBUG - Passing whole rules directly to semgrep_core
+2025-06-02 12:42:02,559 - semgrep.core_runner - DEBUG - Running Semgrep engine with command:
+2025-06-02 12:42:02,559 - semgrep.core_runner - DEBUG - /tmp/_MEIIeooEz/semgrep/bin/opengrep-core -json -rules /tmp/tmplo3rvojz.json -j 8 -targets /tmp/tmpoall4jpr -timeout 5 -timeout_threshold 3 -max_memory 0 -fast
