@@ -2,13 +2,17 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import path from "path";
+import { fileURLToPath } from "url";
 import runtimeErrorOverlay from "@replit/vite-plugin-runtime-error-modal";
+
+// --- ✅ Add this block at the top ---
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 // Optional: only use cartographer in Replit (skip if you're not using Replit)
 const isReplit = process.env.REPL_ID !== undefined;
 const isDev = process.env.NODE_ENV !== "production";
 
-// Only include cartographer conditionally (no await!)
 const plugins = [
   react(),
   runtimeErrorOverlay(),
