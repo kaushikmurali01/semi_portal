@@ -34,14 +34,17 @@ interface Application {
   facilityName?: string;
   description?: string;
   detailedStatus?: string;
+  detailedStatusLabel?: string;
   hasPreActivitySubmission?: boolean;
   hasPostActivitySubmission?: boolean;
+  assignedContractors?: any[];
 }
 
 interface ApplicationTableProps {
   applications: Application[];
   showColumnSelector?: boolean;
   compact?: boolean;
+  columnVisibility?: ColumnVisibility;
 }
 
 interface ColumnVisibility {
@@ -54,6 +57,7 @@ interface ColumnVisibility {
   createdAt: boolean;
   updatedAt: boolean;
   submittedAt: boolean;
+  contractors: boolean;
 }
 
 const DEFAULT_COLUMNS: ColumnVisibility = {
@@ -65,10 +69,11 @@ const DEFAULT_COLUMNS: ColumnVisibility = {
   description: false,
   createdAt: true,
   updatedAt: false,
-  submittedAt: false,
+  submittedAt: true,
+  contractors: true,
 };
 
-export function ApplicationTable({ applications, showColumnSelector = false, compact = false }: ApplicationTableProps) {
+export function ApplicationTable({ applications, showColumnSelector = false, compact = false, columnVisibility: propColumnVisibility }: ApplicationTableProps) {
   const [columnVisibility, setColumnVisibility] = useState<ColumnVisibility>(DEFAULT_COLUMNS);
 
   // For compact mode (dashboard), override column visibility
@@ -82,7 +87,8 @@ export function ApplicationTable({ applications, showColumnSelector = false, com
     createdAt: true,
     updatedAt: false,
     submittedAt: false,
-  } : columnVisibility;
+    contractors: false,
+  } : (propColumnVisibility || columnVisibility);
 
   // Load saved column preferences (only for non-compact mode)
   useEffect(() => {
@@ -107,6 +113,29 @@ export function ApplicationTable({ applications, showColumnSelector = false, com
   };
   // Enhanced status logic to show detailed workflow stages
   const getDetailedStatus = (application: Application) => {
+    // Use the detailedStatusLabel from backend if available (includes template names)
+    if ((application as any).detailedStatusLabel) {
+      const label = (application as any).detailedStatusLabel;
+      
+      // Determine color based on status content
+      if (label.includes('Submitted')) {
+        return { label, color: 'bg-blue-100 text-blue-800' };
+      }
+      if (label.includes('Started')) {
+        return { label, color: 'bg-orange-100 text-orange-800' };
+      }
+      if (label === 'Draft') {
+        return { label, color: 'bg-gray-100 text-gray-800' };
+      }
+      if (label.includes('Approved')) {
+        return { label, color: 'bg-green-100 text-green-800' };
+      }
+      if (label.includes('Review')) {
+        return { label, color: 'bg-yellow-100 text-yellow-800' };
+      }
+      return { label, color: 'bg-blue-100 text-blue-800' };
+    }
+    
     // Use the detailedStatus from backend if available
     if (application.detailedStatus) {
       switch (application.detailedStatus) {
@@ -177,7 +206,7 @@ export function ApplicationTable({ applications, showColumnSelector = false, com
 
     return (
       <Badge className={colorClass}>
-        {activityType}
+        {activity.name}
       </Badge>
     );
   };
@@ -188,6 +217,57 @@ export function ApplicationTable({ applications, showColumnSelector = false, com
       month: 'short',
       day: 'numeric'
     });
+  };
+
+  // Helper to determine submission status based on detailed status
+  const getSubmissionStatus = (application: Application) => {
+    const statusLabel = application.detailedStatusLabel || application.detailedStatus || application.status;
+    
+    console.log(`Checking submission status for ${application.applicationId}: statusLabel="${statusLabel}", status="${application.status}"`);
+    
+    // Check if the status indicates completion (all activities submitted)
+    if (statusLabel && statusLabel.includes('Submitted') && !statusLabel.includes('Started')) {
+      // If it's a final submission (like "PreActivity Submitted" or template name + "Submitted")
+      return 'Submitted';
+    }
+    
+    // Check for partial completion or in progress
+    if (statusLabel && (statusLabel.includes('Started') || statusLabel === 'Draft') || application.status === 'draft') {
+      return 'Not submitted';
+    }
+    
+    // For other statuses like approved, under review, etc.
+    if (['approved', 'under_review', 'rejected', 'needs_revision', 'in_progress'].includes(application.status)) {
+      return 'Submitted';
+    }
+    
+    // Special case: if status is in_progress but detailedStatusLabel shows submission
+    if (application.status === 'in_progress' && statusLabel && statusLabel.includes('Submitted')) {
+      return 'Submitted';
+    }
+    
+    return 'Not submitted';
+  };
+
+  // Helper to display assigned contractors
+  const getContractorsDisplay = (application: Application) => {
+    const contractors = application.assignedContractors;
+    
+    if (!contractors || contractors.length === 0) {
+      return <span className="text-gray-400 text-sm">None assigned</span>;
+    }
+    
+    // Show all contractor names - handle different data formats
+    const contractorNames = contractors.map(c => {
+      // Try different property names based on backend data structure
+      return c.companyName || c.name || c.userFirstName + ' ' + c.userLastName || 'Unknown Contractor';
+    }).filter(name => name && name.trim());
+    
+    return (
+      <div className="text-sm text-gray-700">
+        {contractorNames.length > 0 ? contractorNames.join(', ') : 'Assigned (Name unavailable)'}
+      </div>
+    );
   };
 
   if (applications.length === 0) {
@@ -272,6 +352,12 @@ export function ApplicationTable({ applications, showColumnSelector = false, com
               >
                 Date Submitted
               </DropdownMenuCheckboxItem>
+              <DropdownMenuCheckboxItem
+                checked={columnVisibility.contractors}
+                onCheckedChange={(checked) => updateColumnVisibility('contractors', checked)}
+              >
+                Contractors
+              </DropdownMenuCheckboxItem>
             </DropdownMenuContent>
           </DropdownMenu>
         </div>
@@ -289,6 +375,7 @@ export function ApplicationTable({ applications, showColumnSelector = false, com
             {effectiveColumnVisibility.description && <TableHead>Description</TableHead>}
             {effectiveColumnVisibility.updatedAt && <TableHead>Updated</TableHead>}
             {effectiveColumnVisibility.submittedAt && <TableHead>Submitted</TableHead>}
+            {effectiveColumnVisibility.contractors && <TableHead>Contractors</TableHead>}
             <TableHead className="w-[100px]">Actions</TableHead>
           </TableRow>
         </TableHeader>
@@ -344,10 +431,12 @@ export function ApplicationTable({ applications, showColumnSelector = false, com
               )}
               {effectiveColumnVisibility.submittedAt && (
                 <TableCell className="text-sm text-gray-500">
-                  {application.submittedAt 
-                    ? formatDate(application.submittedAt)
-                    : 'Not submitted'
-                  }
+                  {getSubmissionStatus(application)}
+                </TableCell>
+              )}
+              {effectiveColumnVisibility.contractors && (
+                <TableCell>
+                  {getContractorsDisplay(application)}
                 </TableCell>
               )}
               <TableCell>

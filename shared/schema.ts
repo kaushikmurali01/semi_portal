@@ -9,6 +9,7 @@ import {
   integer,
   boolean,
   pgEnum,
+  unique,
 } from "drizzle-orm/pg-core";
 import { relations } from "drizzle-orm";
 import { createInsertSchema } from "drizzle-zod";
@@ -26,13 +27,15 @@ export const sessions = pgTable(
 );
 
 // Enums
-export const roleEnum = pgEnum("role", ["team_member", "company_admin", "contractor_individual", "system_admin"]);
-export const permissionLevelEnum = pgEnum("permission_level", ["viewer", "editor", "manager"]);
-export const activityTypeEnum = pgEnum("activity_type", ["FRA", "SEM", "EEA", "EMIS", "CR"]);
+export const roleEnum = pgEnum("role", ["team_member", "company_admin", "contractor_individual", "contractor_team_member", "contractor_account_owner", "contractor_manager", "system_admin"]);
+export const permissionLevelEnum = pgEnum("permission_level", ["viewer", "editor", "manager", "owner"]);
+export const activityTypeEnum = pgEnum("activity_type", ["FRA", "SEM", "EAA", "EMIS", "CR"]);
 export const applicationStatusEnum = pgEnum("application_status", ["draft", "in_progress", "submitted", "under_review", "approved", "rejected", "needs_revision"]);
+export const approvalStatusEnum = pgEnum("approval_status", ["pending", "approved", "rejected", "needs_revision"]);
 export const documentTypeEnum = pgEnum("document_type", ["pre_activity", "post_activity", "supporting", "template", "other"]);
 export const typeOfOperationEnum = pgEnum("type_of_operation", ["continuous", "semi_continuous", "batch"]);
-export const notificationTypeEnum = pgEnum("notification_type", ["facility_added", "application_submitted", "application_status_changed", "team_member_added", "document_uploaded"]);
+export const notificationTypeEnum = pgEnum("notification_type", ["facility_added", "application_submitted", "application_status_changed", "team_member_added", "document_uploaded", "ticket_resolved", "message_received", "ticket_updated", "new_message", "admin_reply"]);
+export const invitationStatusEnum = pgEnum("invitation_status", ["pending", "accepted", "declined", "expired"]);
 
 // User storage table
 export const users = pgTable("users", {
@@ -41,16 +44,20 @@ export const users = pgTable("users", {
   password: varchar("password"),
   firstName: varchar("first_name"),
   lastName: varchar("last_name"),
+  businessMobile: varchar("business_mobile"),
   profileImageUrl: varchar("profile_image_url"),
   role: roleEnum("role").default("team_member").notNull(),
   permissionLevel: permissionLevelEnum("permission_level").default("viewer"),
   companyId: integer("company_id"),
   isActive: boolean("is_active").default(true),
   hearAboutUs: varchar("hear_about_us"),
+  hearAboutUsOther: varchar("hear_about_us_other"),
   emailVerificationToken: varchar("email_verification_token"),
   verificationTokenExpiry: timestamp("verification_token_expiry"),
   emailVerifiedAt: timestamp("email_verified_at"),
   isEmailVerified: boolean("is_email_verified").default(false),
+  resetToken: varchar("reset_token"),
+  resetExpiry: timestamp("reset_expiry"),
   twoFactorSecret: varchar("two_factor_secret"),
   twoFactorEnabled: boolean("two_factor_enabled").default(false),
   createdAt: timestamp("created_at").defaultNow(),
@@ -62,9 +69,30 @@ export const companies = pgTable("companies", {
   id: serial("id").primaryKey(),
   name: varchar("name", { length: 255 }).notNull(),
   shortName: varchar("short_name", { length: 6 }).notNull().unique(),
-  address: text("address"),
-  phone: varchar("phone", { length: 20 }),
+  businessNumber: varchar("business_number"),
   website: varchar("website"),
+  
+  // Address Information
+  streetAddress: text("street_address"),
+  city: varchar("city"),
+  province: varchar("province"),
+  country: varchar("country"),
+  postalCode: varchar("postal_code"),
+  
+  // Legacy fields
+  address: text("address"), // Keep for backward compatibility
+  phone: varchar("phone", { length: 20 }),
+  
+  // Program Discovery
+  howHeardAbout: varchar("how_heard_about"),
+  howHeardAboutOther: text("how_heard_about_other"),
+  
+  // Contractor Information
+  isContractor: boolean("is_contractor").default(false),
+  serviceRegions: text("service_regions").array(),
+  supportedActivities: text("supported_activities").array(),
+  capitalRetrofitTechnologies: text("capital_retrofit_technologies").array(),
+  
   isActive: boolean("is_active").default(true),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
@@ -95,16 +123,41 @@ export const facilities = pgTable("facilities", {
   
   // Facility Details
   grossFloorArea: integer("gross_floor_area"),
+  grossFloorAreaUnit: varchar("gross_floor_area_unit", { length: 10 }).default("sq_ft"),
+  grossFloorAreaIsTemporary: boolean("gross_floor_area_is_temporary").default(false),
   yearBuilt: integer("year_built"),
   weeklyOperatingHours: integer("weekly_operating_hours"),
+  weeklyOperatingHoursIsTemporary: boolean("weekly_operating_hours_is_temporary").default(false),
   numberOfWorkersMainShift: integer("number_of_workers_main_shift"),
+  numberOfWorkersMainShiftIsTemporary: boolean("number_of_workers_main_shift_is_temporary").default(false),
   typeOfOperation: typeOfOperationEnum("type_of_operation"),
   
   // Energy Management Information System
   hasEMIS: boolean("has_emis"),
   hasEnergyManager: boolean("has_energy_manager"),
   
-  // Facility Process and Systems (stored as JSON array)
+  // Individual Process and Systems checkboxes
+  processCompressedAir: boolean("process_compressed_air").default(false),
+  processControlSystem: boolean("process_control_system").default(false),
+  processElectrochemical: boolean("process_electrochemical").default(false),
+  processFacilityNonProcess: boolean("process_facility_non_process").default(false),
+  processFacilitySubmetering: boolean("process_facility_submetering").default(false),
+  processHVAC: boolean("process_hvac").default(false),
+  processIndustrialGases: boolean("process_industrial_gases").default(false),
+  processLighting: boolean("process_lighting").default(false),
+  processMotors: boolean("process_motors").default(false),
+  processOther: boolean("process_other").default(false),
+  processPumpingFans: boolean("process_pumping_fans").default(false),
+  processRefrigeration: boolean("process_refrigeration").default(false),
+  processWasteHeatRecovery: boolean("process_waste_heat_recovery").default(false),
+  processMaterialProcessing: boolean("process_material_processing").default(false),
+  processProcessCooling: boolean("process_process_cooling").default(false),
+  processProcessHeating: boolean("process_process_heating").default(false),
+  processPumps: boolean("process_pumps").default(false),
+  processSteamSystem: boolean("process_steam_system").default(false),
+  processOtherSystems: boolean("process_other_systems").default(false),
+  
+  // Facility Process and Systems (stored as JSON array for backward compatibility)
   processAndSystems: text("process_and_systems").array(),
   
   // Legacy fields
@@ -177,6 +230,16 @@ export const applicationAssignments = pgTable("application_assignments", {
   createdAt: timestamp("created_at").defaultNow(),
 });
 
+// Company-level application assignments (for tracking contractor company access)
+export const companyApplicationAssignments = pgTable("company_application_assignments", {
+  id: serial("id").primaryKey(),
+  applicationId: integer("application_id").notNull(),
+  contractorCompanyId: integer("contractor_company_id").notNull(),
+  assignedBy: varchar("assigned_by").notNull(),
+  assignedAt: timestamp("assigned_at").defaultNow(),
+  isActive: boolean("is_active").default(true),
+});
+
 // Activity settings (admin configurable)
 export const activitySettings = pgTable("activity_settings", {
   id: serial("id").primaryKey(),
@@ -185,18 +248,54 @@ export const activitySettings = pgTable("activity_settings", {
   requiresFRA: boolean("requires_fra").default(false),
   maxApplications: integer("max_applications"),
   description: text("description"),
+  // Contractor assignment fields
+  allowContractorAssignment: boolean("allow_contractor_assignment").default(false),
+  contractorFilterType: varchar("contractor_filter_type", { length: 20 }).default("all"),
+  requiredContractorActivities: text("required_contractor_activities").array(),
   updatedBy: varchar("updated_by"),
   updatedAt: timestamp("updated_at").defaultNow(),
 });
 
-// Form Templates - Global forms for each activity type and phase
+// Facility Activity Settings - Enerva admin can enable/disable activities per facility
+export const facilityActivitySettings = pgTable("facility_activity_settings", {
+  id: serial("id").primaryKey(),
+  facilityId: integer("facility_id").notNull(),
+  activityType: activityTypeEnum("activity_type").notNull(),
+  isEnabled: boolean("is_enabled").default(false).notNull(),
+  enabledBy: varchar("enabled_by"), // system admin who enabled it
+  enabledAt: timestamp("enabled_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+// Activity Templates - Redesigned for flexible activity management
+export const activityTemplates = pgTable("activity_templates", {
+  id: serial("id").primaryKey(),
+  activityType: activityTypeEnum("activity_type").notNull(), // FRA, SEM, EAA, EMIS, CR
+  templateName: varchar("template_name", { length: 255 }).notNull(), // e.g., "Pre-Assessment", "Post-Assessment", "Site Visit"
+  displayOrder: integer("display_order").notNull(), // Order within the activity type (1, 2, 3...)
+  description: text("description"),
+  formFields: text("form_fields"), // JSON string containing form field definitions
+  isRequired: boolean("is_required").default(true), // Whether this template must be completed
+  prerequisiteTemplateId: integer("prerequisite_template_id"), // Reference to template that must be completed first
+  isActive: boolean("is_active").default(true),
+  // Contractor assignment fields
+  allowContractorAssignment: boolean("allow_contractor_assignment").default(false), // Whether participating companies can assign contractors
+  contractorFilterType: varchar("contractor_filter_type", { length: 20 }).default("all"), // "all", "specific_activities"
+  requiredContractorActivities: varchar("required_contractor_activities").array(), // Activities contractors must support
+  createdBy: varchar("created_by").notNull(),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+// Form Templates - Legacy table, keeping for backward compatibility
 export const formTemplates = pgTable("form_templates", {
   id: serial("id").primaryKey(),
   activityType: activityTypeEnum("activity_type").notNull(),
-  phase: varchar("phase", { length: 20 }).notNull(), // 'pre_activity' or 'post_activity'
+  phase: varchar("phase", { length: 20 }), // Optional for new activity-based templates
   name: varchar("name", { length: 255 }).notNull(),
   description: text("description"),
   formFields: text("form_fields"), // JSON string containing form field definitions
+  order: integer("order").default(1), // Display order for templates
   isActive: boolean("is_active").default(true),
   createdBy: varchar("created_by").notNull(),
   createdAt: timestamp("created_at").defaultNow(),
@@ -220,21 +319,40 @@ export const formFields = pgTable("form_fields", {
   updatedAt: timestamp("updated_at").defaultNow(),
 });
 
-// Application Submissions - Tracks pre/post activity submissions
-export const applicationSubmissions = pgTable("application_submissions", {
+// Activity Template Submissions - Tracks submissions for each activity template
+export const activityTemplateSubmissions = pgTable("activity_template_submissions", {
   id: serial("id").primaryKey(),
   applicationId: integer("application_id").notNull(),
-  phase: varchar("phase", { length: 20 }).notNull(), // 'pre_activity' or 'post_activity'
-  formTemplateId: integer("form_template_id").notNull(),
+  activityTemplateId: integer("activity_template_id").notNull(),
+  data: jsonb("data").notNull(), // JSON of the actual form data submitted
+  status: varchar("status", { length: 20 }).default("draft").notNull(), // 'draft', 'submitted', 'reviewed', 'approved', 'rejected'
+  approvalStatus: approvalStatusEnum("approval_status").default("pending"),
+  submittedAt: timestamp("submitted_at"),
   submittedBy: varchar("submitted_by").notNull(),
-  submittedAt: timestamp("submitted_at").defaultNow(),
-  status: varchar("status", { length: 20 }).default("submitted").notNull(), // 'submitted', 'reviewed', 'approved', 'rejected'
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+  templateSnapshot: jsonb("template_snapshot"), // JSON snapshot of the template at submission time
   reviewedBy: varchar("reviewed_by"),
   reviewedAt: timestamp("reviewed_at"),
   reviewNotes: text("review_notes"),
+});
 
+// Application Submissions - Legacy table for backward compatibility
+export const applicationSubmissions = pgTable("application_submissions", {
+  id: serial("id").primaryKey(),
+  applicationId: integer("application_id").notNull(),
+  formTemplateId: integer("form_template_id").notNull(),
+  phase: varchar("phase", { length: 20 }).notNull(), // 'pre_activity' or 'post_activity'
+  data: jsonb("data").notNull(), // Form submission data
+  status: varchar("status", { length: 20 }).default("draft").notNull(), // 'draft', 'submitted', 'reviewed', 'approved', 'rejected'
+  approvalStatus: approvalStatusEnum("approval_status").default("pending"),
+  submittedAt: timestamp("submitted_at"),
+  submittedBy: varchar("submitted_by").notNull(),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
+  reviewedBy: varchar("reviewed_by"),
+  reviewedAt: timestamp("reviewed_at"),
+  reviewNotes: text("review_notes"),
 });
 
 // Form Responses - User responses to form fields
@@ -279,6 +397,62 @@ export const notifications = pgTable("notifications", {
   applicationId: integer("application_id"), // optional link to specific application
   messageId: integer("message_id"), // optional link to specific message
   createdAt: timestamp("created_at").defaultNow(),
+});
+
+// System Announcements - Platform-wide announcements created by system admin
+export const systemAnnouncements = pgTable("system_announcements", {
+  id: serial("id").primaryKey(),
+  title: varchar("title", { length: 255 }).notNull(),
+  message: text("message").notNull(),
+  type: varchar("type", { length: 50 }).notNull(), // 'maintenance', 'upgrade', 'issue', 'info', 'urgent'
+  severity: varchar("severity", { length: 20 }).default("info").notNull(), // 'low', 'medium', 'high', 'critical'
+  targetRoles: varchar("target_roles").array().default([]).notNull(), // ['all'] or specific roles
+  isActive: boolean("is_active").default(true).notNull(),
+  requiresAcknowledgment: boolean("requires_acknowledgment").default(false).notNull(),
+  scheduledStart: timestamp("scheduled_start"),
+  scheduledEnd: timestamp("scheduled_end"),
+  createdBy: varchar("created_by").notNull(),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+// Announcement Acknowledgments - Track which users have acknowledged announcements
+export const announcementAcknowledgments = pgTable("announcement_acknowledgments", {
+  id: serial("id").primaryKey(),
+  announcementId: integer("announcement_id").notNull(),
+  userId: varchar("user_id").notNull(),
+  acknowledgedAt: timestamp("acknowledged_at").defaultNow(),
+}, (table) => [
+  unique().on(table.announcementId, table.userId)
+]);
+
+// Team Invitations - For contractor team management
+export const teamInvitations = pgTable("team_invitations", {
+  id: serial("id").primaryKey(),
+  invitedByUserId: varchar("invited_by_user_id").notNull(),
+  email: varchar("email").notNull(),
+  firstName: varchar("first_name").notNull(),
+  lastName: varchar("last_name").notNull(),
+  permissionLevel: varchar("permission_level").default("viewer").notNull(),
+  companyId: integer("company_id").notNull(),
+  invitationToken: varchar("invitation_token").notNull().unique(),
+  status: varchar("status").default("pending").notNull(),
+  expiresAt: timestamp("expires_at").notNull(),
+  username: varchar("username"),
+  password: varchar("password"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+// Ghost Application IDs table - tracks deleted application IDs to prevent immediate reuse
+export const ghostApplicationIds = pgTable("ghost_application_ids", {
+  id: serial("id").primaryKey(),
+  applicationId: varchar("application_id", { length: 50 }).notNull().unique(),
+  companyId: integer("company_id").notNull().references(() => companies.id),
+  facilityId: integer("facility_id").notNull().references(() => facilities.id),
+  activityType: activityTypeEnum("activity_type").notNull(),
+  originalTitle: varchar("original_title", { length: 255 }),
+  deletedAt: timestamp("deleted_at").defaultNow().notNull(),
 });
 
 // Relations
@@ -376,6 +550,54 @@ export const applicationAssignmentsRelations = relations(applicationAssignments,
   }),
 }));
 
+export const companyApplicationAssignmentsRelations = relations(companyApplicationAssignments, ({ one }) => ({
+  application: one(applications, {
+    fields: [companyApplicationAssignments.applicationId],
+    references: [applications.id],
+  }),
+  contractorCompany: one(companies, {
+    fields: [companyApplicationAssignments.contractorCompanyId],
+    references: [companies.id],
+  }),
+  assigner: one(users, {
+    fields: [companyApplicationAssignments.assignedBy],
+    references: [users.id],
+  }),
+}));
+
+// Activity Template Relations
+export const activityTemplatesRelations = relations(activityTemplates, ({ one, many }) => ({
+  prerequisiteTemplate: one(activityTemplates, {
+    fields: [activityTemplates.prerequisiteTemplateId],
+    references: [activityTemplates.id],
+    relationName: "prerequisite",
+  }),
+  dependentTemplates: many(activityTemplates, {
+    relationName: "prerequisite",
+  }),
+  submissions: many(activityTemplateSubmissions),
+}));
+
+export const activityTemplateSubmissionsRelations = relations(activityTemplateSubmissions, ({ one, many }) => ({
+  application: one(applications, {
+    fields: [activityTemplateSubmissions.applicationId],
+    references: [applications.id],
+  }),
+  activityTemplate: one(activityTemplates, {
+    fields: [activityTemplateSubmissions.activityTemplateId],
+    references: [activityTemplates.id],
+  }),
+  submitter: one(users, {
+    fields: [activityTemplateSubmissions.submittedBy],
+    references: [users.id],
+  }),
+  reviewer: one(users, {
+    fields: [activityTemplateSubmissions.reviewedBy],
+    references: [users.id],
+  }),
+  formResponses: many(formResponses),
+}));
+
 export const formTemplatesRelations = relations(formTemplates, ({ many }) => ({
   formFields: many(formFields),
   applicationSubmissions: many(applicationSubmissions),
@@ -445,7 +667,6 @@ export const insertFacilitySchema = createInsertSchema(facilities).omit({
 
 export const insertApplicationSchema = createInsertSchema(applications).omit({
   id: true,
-  applicationId: true,
   submittedAt: true,
   reviewedBy: true,
   reviewedAt: true,
@@ -471,8 +692,32 @@ export const insertApplicationAssignmentSchema = createInsertSchema(applicationA
   createdAt: true,
 });
 
+export const insertCompanyApplicationAssignmentSchema = createInsertSchema(companyApplicationAssignments).omit({
+  id: true,
+  assignedAt: true,
+});
+
 export const insertActivitySettingsSchema = createInsertSchema(activitySettings).omit({
   id: true,
+  updatedAt: true,
+});
+
+export const insertFacilityActivitySettingsSchema = createInsertSchema(facilityActivitySettings).omit({
+  id: true,
+  enabledAt: true,
+  updatedAt: true,
+});
+
+export const insertActivityTemplateSchema = createInsertSchema(activityTemplates).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+
+export const insertActivityTemplateSubmissionSchema = createInsertSchema(activityTemplateSubmissions).omit({
+  id: true,
+  submittedAt: true,
+  createdAt: true,
   updatedAt: true,
 });
 
@@ -512,6 +757,23 @@ export const insertNotificationSchema = createInsertSchema(notifications).omit({
   createdAt: true,
 });
 
+export const insertSystemAnnouncementSchema = createInsertSchema(systemAnnouncements).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+
+export const insertAnnouncementAcknowledgmentSchema = createInsertSchema(announcementAcknowledgments).omit({
+  id: true,
+  acknowledgedAt: true,
+});
+
+export const insertTeamInvitationSchema = createInsertSchema(teamInvitations).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+
 // Types
 export type UpsertUser = typeof users.$inferInsert;
 export type User = typeof users.$inferSelect;
@@ -527,9 +789,16 @@ export type InsertDocument = z.infer<typeof insertDocumentSchema>;
 export type ContractorDetails = typeof contractorDetails.$inferSelect;
 export type InsertContractorDetails = z.infer<typeof insertContractorDetailsSchema>;
 export type ApplicationAssignment = typeof applicationAssignments.$inferSelect;
+export type CompanyApplicationAssignment = typeof companyApplicationAssignments.$inferSelect;
 export type InsertApplicationAssignment = z.infer<typeof insertApplicationAssignmentSchema>;
 export type ActivitySettings = typeof activitySettings.$inferSelect;
 export type InsertActivitySettings = z.infer<typeof insertActivitySettingsSchema>;
+export type FacilityActivitySettings = typeof facilityActivitySettings.$inferSelect;
+export type InsertFacilityActivitySettings = z.infer<typeof insertFacilityActivitySettingsSchema>;
+export type ActivityTemplate = typeof activityTemplates.$inferSelect;
+export type InsertActivityTemplate = z.infer<typeof insertActivityTemplateSchema>;
+export type ActivityTemplateSubmission = typeof activityTemplateSubmissions.$inferSelect;
+export type InsertActivityTemplateSubmission = z.infer<typeof insertActivityTemplateSubmissionSchema>;
 export type FormTemplate = typeof formTemplates.$inferSelect;
 export type InsertFormTemplate = z.infer<typeof insertFormTemplateSchema>;
 export type FormField = typeof formFields.$inferSelect;
@@ -542,3 +811,9 @@ export type Message = typeof messages.$inferSelect;
 export type InsertMessage = z.infer<typeof insertMessageSchema>;
 export type Notification = typeof notifications.$inferSelect;
 export type InsertNotification = z.infer<typeof insertNotificationSchema>;
+export type SystemAnnouncement = typeof systemAnnouncements.$inferSelect;
+export type InsertSystemAnnouncement = z.infer<typeof insertSystemAnnouncementSchema>;
+export type AnnouncementAcknowledgment = typeof announcementAcknowledgments.$inferSelect;
+export type InsertAnnouncementAcknowledgment = z.infer<typeof insertAnnouncementAcknowledgmentSchema>;
+export type TeamInvitation = typeof teamInvitations.$inferSelect;
+export type InsertTeamInvitation = z.infer<typeof insertTeamInvitationSchema>;

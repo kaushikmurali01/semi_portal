@@ -7,10 +7,18 @@ import {
   contractorDetails,
   applicationAssignments,
   activitySettings,
+  facilityActivitySettings,
+  activityTemplates,
+  activityTemplateSubmissions,
   formTemplates,
   applicationSubmissions,
   messages,
   notifications,
+  teamInvitations,
+  ghostApplicationIds,
+  systemAnnouncements,
+  announcementAcknowledgments,
+
   type User,
   type UpsertUser,
   type Company,
@@ -27,6 +35,10 @@ import {
   type InsertApplicationAssignment,
   type ActivitySettings,
   type InsertActivitySettings,
+  type ActivityTemplate,
+  type InsertActivityTemplate,
+  type ActivityTemplateSubmission,
+  type InsertActivityTemplateSubmission,
   type FormTemplate,
   type InsertFormTemplate,
   type ApplicationSubmission,
@@ -35,9 +47,16 @@ import {
   type InsertMessage,
   type Notification,
   type InsertNotification,
+  type TeamInvitation,
+  type InsertTeamInvitation,
+  type SystemAnnouncement,
+  type InsertSystemAnnouncement,
+  type AnnouncementAcknowledgment,
+  type InsertAnnouncementAcknowledgment,
 } from "@shared/schema";
 import { db } from "./db";
-import { eq, and, desc, sql, inArray, or, isNull, isNotNull, like } from "drizzle-orm";
+import { eq, and, desc, sql, inArray, or, isNull, isNotNull, like, exists, ne, count, lte, gte } from "drizzle-orm";
+import { nanoid } from "nanoid";
 
 export interface IStorage {
   // User operations
@@ -53,8 +72,10 @@ export interface IStorage {
   createCompany(company: InsertCompany): Promise<Company>;
   getCompanyById(id: number): Promise<Company | undefined>;
   getCompanyByShortName(shortName: string): Promise<Company | undefined>;
+  getCompanyByName(name: string): Promise<Company | undefined>;
   getCompanies(): Promise<Company[]>;
   updateCompany(id: number, updates: Partial<InsertCompany>): Promise<Company>;
+  searchCompanies(query: string): Promise<Company[]>;
   
   // Facility operations
   createFacility(facility: InsertFacility): Promise<Facility>;
@@ -85,12 +106,28 @@ export interface IStorage {
   // Team management
   getUsersByCompany(companyId: number): Promise<User[]>;
   updateUserRole(userId: string, role: string): Promise<User>;
+  
+  // Activity settings operations
+  getFacilityActivitySettings(facilityId: number): Promise<any[]>;
+  getActivitySettings(): Promise<any[]>;
+  
+  // Contractor assignment operations
+  getAssignedContractors(applicationId: number): Promise<any[]>;
+  removeApplicationContractorAssignments(applicationId: number): Promise<void>;
   deactivateUser(userId: string): Promise<User>;
   
   // Contractor operations
   createContractorDetails(details: InsertContractorDetails): Promise<ContractorDetails>;
   getContractorDetails(userId: string): Promise<ContractorDetails | undefined>;
   updateContractorDetails(userId: string, updates: Partial<InsertContractorDetails>): Promise<ContractorDetails>;
+  getContractorCompany(companyId: number): Promise<Company | undefined>;
+  getContractorApplications(companyId: number): Promise<any[]>;
+  getContractorTeamMembers(companyId: number): Promise<User[]>;
+  updateContractorServices(companyId: number, updates: { serviceRegions: string[]; supportedActivities: string[] }): Promise<Company>;
+  createContractorInvitation(invitation: any): Promise<any>;
+  assignApplicationToContractor(assignment: any): Promise<any>;
+  searchContractors(filters: { activityType?: string; region?: string }): Promise<Company[]>;
+  getAllContractors(): Promise<Company[]>;
   
   // Application assignments
   createApplicationAssignment(assignment: InsertApplicationAssignment): Promise<ApplicationAssignment>;
@@ -100,19 +137,50 @@ export interface IStorage {
   
   // Activity settings
   getActivitySettings(): Promise<ActivitySettings[]>;
-  updateActivitySetting(activityType: string, isEnabled: boolean, updatedBy: string): Promise<ActivitySettings>;
+  updateActivitySetting(activityType: string, updates: { isEnabled?: boolean; maxApplications?: number; description?: string; updatedBy: string }): Promise<ActivitySettings>;
+  
+  // Facility-specific activity settings
+  getFacilityActivitySettings(facilityId: number): Promise<any[]>;
+  updateFacilityActivitySetting(facilityId: number, activityType: string, isEnabled: boolean): Promise<any>;
   
   // Application submission operations
   createApplicationSubmission(submission: InsertApplicationSubmission): Promise<ApplicationSubmission>;
   getApplicationSubmissions(applicationId: number): Promise<ApplicationSubmission[]>;
   updateApplicationSubmission(id: number, updates: Partial<InsertApplicationSubmission>): Promise<ApplicationSubmission>;
   
-  // Form template operations
+  // Activity template operations (new flexible system)
+  createActivityTemplate(template: InsertActivityTemplate): Promise<ActivityTemplate>;
+  getActivityTemplates(activityType: string): Promise<ActivityTemplate[]>;
+  getAllActivityTemplates(): Promise<ActivityTemplate[]>;
+  updateActivityTemplate(id: number, updates: Partial<InsertActivityTemplate>): Promise<ActivityTemplate>;
+  deleteActivityTemplate(id: number): Promise<void>;
+  getActivityTemplateById(id: number): Promise<ActivityTemplate | undefined>;
+  
+  // Activity template submission operations
+  createActivityTemplateSubmission(submission: InsertActivityTemplateSubmission): Promise<ActivityTemplateSubmission>;
+  getActivityTemplateSubmissions(applicationId: number): Promise<ActivityTemplateSubmission[]>;
+  updateActivityTemplateSubmission(id: number, updates: Partial<InsertActivityTemplateSubmission>): Promise<ActivityTemplateSubmission>;
+  
+  // Approval operations
+  getPendingSubmissions(): Promise<any[]>;
+  approveSubmission(submissionId: number, reviewedBy: string, reviewNotes?: string): Promise<ActivityTemplateSubmission>;
+  rejectSubmission(submissionId: number, reviewedBy: string, reviewNotes: string): Promise<ActivityTemplateSubmission>;
+  getSubmissionDetails(submissionId: number): Promise<any>;
+  getApplicationWithFullDetails(applicationId: number): Promise<any>;
+  
+  // Form template operations (legacy)
   createFormTemplate(template: InsertFormTemplate): Promise<FormTemplate>;
   getFormTemplates(activityType: string): Promise<FormTemplate[]>;
+  getFormTemplatesByActivity(activityType: string): Promise<FormTemplate[]>;
   getAllFormTemplates(): Promise<FormTemplate[]>;
+  getFormTemplateById(id: number): Promise<FormTemplate | undefined>;
   updateFormTemplate(id: number, updates: Partial<InsertFormTemplate>): Promise<FormTemplate>;
+  deleteFormTemplate(id: number): Promise<void>;
+  checkFormTemplateHasSubmissions(templateId: number): Promise<boolean>;
   getApplication(id: number): Promise<Application | undefined>;
+  
+  // Form submission operations
+  createFormSubmission(submission: InsertApplicationSubmission): Promise<ApplicationSubmission>;
   
 
   
@@ -148,9 +216,7 @@ export class DatabaseStorage implements IStorage {
     return user;
   }
 
-  async getAdminUsers(): Promise<User[]> {
-    return await db.select().from(users).where(eq(users.role, 'system_admin'));
-  }
+
 
   async getUserByEmail(email: string): Promise<User | undefined> {
     const [user] = await db.select().from(users).where(eq(users.email, email));
@@ -210,6 +276,11 @@ export class DatabaseStorage implements IStorage {
     return company;
   }
 
+  async getCompanyByName(name: string): Promise<Company | undefined> {
+    const [company] = await db.select().from(companies).where(eq(companies.name, name));
+    return company;
+  }
+
   async getCompanies(): Promise<Company[]> {
     return await db.select().from(companies).orderBy(companies.name);
   }
@@ -223,16 +294,103 @@ export class DatabaseStorage implements IStorage {
     return company;
   }
 
+  async searchCompanies(query: string): Promise<Company[]> {
+    return await db
+      .select()
+      .from(companies)
+      .where(
+        or(
+          like(companies.name, `%${query}%`),
+          like(companies.shortName, `%${query}%`)
+        )
+      )
+      .orderBy(companies.name)
+      .limit(10);
+  }
+
   // Facility operations
   async createFacility(facility: InsertFacility): Promise<Facility> {
     const [newFacility] = await db.insert(facilities).values(facility).returning();
     return newFacility;
   }
 
-  async getFacilitiesByCompany(companyId: number): Promise<Facility[]> {
+  async getFacilitiesByCompany(companyId: number): Promise<any[]> {
     return await db
-      .select()
+      .select({
+        id: facilities.id,
+        name: facilities.name,
+        code: facilities.code,
+        facilityCode: facilities.code,
+        description: facilities.description,
+        companyId: facilities.companyId,
+        
+        // NAICS Information
+        naicsCode: facilities.naicsCode,
+        facilitySector: facilities.facilitySector,
+        facilityCategory: facilities.facilityCategory,
+        facilityType: facilities.facilityType,
+        facilityPhotoUrl: facilities.facilityPhotoUrl,
+        
+        // Address Information
+        unitNumber: facilities.unitNumber,
+        streetNumber: facilities.streetNumber,
+        streetName: facilities.streetName,
+        city: facilities.city,
+        province: facilities.province,
+        country: facilities.country,
+        postalCode: facilities.postalCode,
+        address: facilities.address,
+        
+        // Facility Details
+        grossFloorArea: facilities.grossFloorArea,
+        yearBuilt: facilities.yearBuilt,
+        weeklyOperatingHours: facilities.weeklyOperatingHours,
+        numberOfWorkersMainShift: facilities.numberOfWorkersMainShift,
+        typeOfOperation: facilities.typeOfOperation,
+        
+        // Energy Management
+        hasEMIS: facilities.hasEMIS,
+        hasEnergyManager: facilities.hasEnergyManager,
+        
+        // Temporary Value Checkboxes
+        grossFloorAreaUnit: facilities.grossFloorAreaUnit,
+        grossFloorAreaIsTemporary: facilities.grossFloorAreaIsTemporary,
+        weeklyOperatingHoursIsTemporary: facilities.weeklyOperatingHoursIsTemporary,
+        numberOfWorkersMainShiftIsTemporary: facilities.numberOfWorkersMainShiftIsTemporary,
+        
+        // Individual Process/Systems Checkboxes
+        processCompressedAir: facilities.processCompressedAir,
+        processControlSystem: facilities.processControlSystem,
+        processElectrochemical: facilities.processElectrochemical,
+        processFacilityNonProcess: facilities.processFacilityNonProcess,
+        processFacilitySubmetering: facilities.processFacilitySubmetering,
+        processHVAC: facilities.processHVAC,
+        processIndustrialGases: facilities.processIndustrialGases,
+        processLighting: facilities.processLighting,
+        processMotors: facilities.processMotors,
+        processOther: facilities.processOther,
+        processPumpingFans: facilities.processPumpingFans,
+        processRefrigeration: facilities.processRefrigeration,
+        processWasteHeatRecovery: facilities.processWasteHeatRecovery,
+        processMaterialProcessing: facilities.processMaterialProcessing,
+        processProcessCooling: facilities.processProcessCooling,
+        processProcessHeating: facilities.processProcessHeating,
+        processPumps: facilities.processPumps,
+        processSteamSystem: facilities.processSteamSystem,
+        processOtherSystems: facilities.processOtherSystems,
+        
+        // Process and Systems Array
+        processAndSystems: facilities.processAndSystems,
+        
+        isActive: facilities.isActive,
+        createdAt: facilities.createdAt,
+        updatedAt: facilities.updatedAt,
+        
+        // Include company name
+        companyName: companies.name
+      })
       .from(facilities)
+      .leftJoin(companies, eq(facilities.companyId, companies.id))
       .where(and(eq(facilities.companyId, companyId), eq(facilities.isActive, true)))
       .orderBy(facilities.name);
   }
@@ -240,6 +398,86 @@ export class DatabaseStorage implements IStorage {
   async getFacilityById(id: number): Promise<Facility | undefined> {
     const [facility] = await db.select().from(facilities).where(eq(facilities.id, id));
     return facility;
+  }
+
+  async getAllFacilities(): Promise<any[]> {
+    return await db
+      .select({
+        id: facilities.id,
+        name: facilities.name,
+        code: facilities.code,
+        facilityCode: facilities.code,
+        description: facilities.description,
+        companyId: facilities.companyId,
+        
+        // NAICS Information
+        naicsCode: facilities.naicsCode,
+        facilitySector: facilities.facilitySector,
+        facilityCategory: facilities.facilityCategory,
+        facilityType: facilities.facilityType,
+        facilityPhotoUrl: facilities.facilityPhotoUrl,
+        
+        // Address Information
+        unitNumber: facilities.unitNumber,
+        streetNumber: facilities.streetNumber,
+        streetName: facilities.streetName,
+        city: facilities.city,
+        province: facilities.province,
+        country: facilities.country,
+        postalCode: facilities.postalCode,
+        address: facilities.address,
+        
+        // Facility Details
+        grossFloorArea: facilities.grossFloorArea,
+        yearBuilt: facilities.yearBuilt,
+        weeklyOperatingHours: facilities.weeklyOperatingHours,
+        numberOfWorkersMainShift: facilities.numberOfWorkersMainShift,
+        typeOfOperation: facilities.typeOfOperation,
+        
+        // Energy Management
+        hasEMIS: facilities.hasEMIS,
+        hasEnergyManager: facilities.hasEnergyManager,
+        
+        // Temporary Value Checkboxes
+        grossFloorAreaUnit: facilities.grossFloorAreaUnit,
+        grossFloorAreaIsTemporary: facilities.grossFloorAreaIsTemporary,
+        weeklyOperatingHoursIsTemporary: facilities.weeklyOperatingHoursIsTemporary,
+        numberOfWorkersMainShiftIsTemporary: facilities.numberOfWorkersMainShiftIsTemporary,
+        
+        // Process and Systems Information
+        processCompressedAir: facilities.processCompressedAir,
+        processControlSystem: facilities.processControlSystem,
+        processElectrochemical: facilities.processElectrochemical,
+        processFacilityNonProcess: facilities.processFacilityNonProcess,
+        processFacilitySubmetering: facilities.processFacilitySubmetering,
+        processHVAC: facilities.processHVAC,
+        processIndustrialGases: facilities.processIndustrialGases,
+        processLighting: facilities.processLighting,
+        processMotors: facilities.processMotors,
+        processOther: facilities.processOther,
+        processPumpingFans: facilities.processPumpingFans,
+        processRefrigeration: facilities.processRefrigeration,
+        processWasteHeatRecovery: facilities.processWasteHeatRecovery,
+        processMaterialProcessing: facilities.processMaterialProcessing,
+        processProcessCooling: facilities.processProcessCooling,
+        processProcessHeating: facilities.processProcessHeating,
+        processPumps: facilities.processPumps,
+        processSteamSystem: facilities.processSteamSystem,
+        processOtherSystems: facilities.processOtherSystems,
+        processAndSystems: facilities.processAndSystems,
+        
+        isActive: facilities.isActive,
+        created_at: facilities.createdAt,
+        createdAt: facilities.createdAt,
+        updatedAt: facilities.updatedAt,
+        
+        // Include company name
+        companyName: companies.name
+      })
+      .from(facilities)
+      .leftJoin(companies, eq(facilities.companyId, companies.id))
+      .where(eq(facilities.isActive, true))
+      .orderBy(facilities.createdAt);
   }
 
   async updateFacility(id: number, updates: Partial<InsertFacility>): Promise<Facility> {
@@ -251,11 +489,149 @@ export class DatabaseStorage implements IStorage {
     return facility;
   }
 
+  async getAllCompaniesForAdmin(): Promise<any[]> {
+    // Return ALL companies for comprehensive admin management
+    return await db
+      .select()
+      .from(companies)
+      .orderBy(companies.createdAt);
+  }
+
+  async getCompanyWithDetails(companyId: number): Promise<any> {
+    // Get company details
+    const [company] = await db
+      .select()
+      .from(companies)
+      .where(eq(companies.id, companyId))
+      .limit(1);
+
+    if (!company) return null;
+
+    // Get users for this company
+    const companyUsers = await db
+      .select()
+      .from(users)
+      .where(eq(users.companyId, companyId))
+      .orderBy(users.createdAt);
+
+    // Get facilities for this company
+    const companyFacilities = await db
+      .select()
+      .from(facilities)
+      .where(eq(facilities.companyId, companyId))
+      .orderBy(facilities.createdAt);
+
+    // Get applications for this company
+    const companyApplications = await db
+      .select()
+      .from(applications)
+      .where(eq(applications.companyId, companyId))
+      .orderBy(applications.createdAt);
+
+    return {
+      ...company,
+      users: companyUsers,
+      facilities: companyFacilities,
+      applications: companyApplications
+    };
+  }
+
+  async toggleCompanyStatus(companyId: number, isActive: boolean): Promise<any> {
+    const [company] = await db
+      .update(companies)
+      .set({ isActive, updatedAt: new Date() })
+      .where(eq(companies.id, companyId))
+      .returning();
+    return company;
+  }
+
+  async updateCompanyShortName(companyId: number, newShortName: string): Promise<any> {
+    // Get current company info
+    const [company] = await db
+      .select()
+      .from(companies)
+      .where(eq(companies.id, companyId))
+      .limit(1);
+
+    if (!company) throw new Error('Company not found');
+
+    const oldShortName = company.shortName;
+
+    // Update company shortname
+    const [updatedCompany] = await db
+      .update(companies)
+      .set({ shortName: newShortName, updatedAt: new Date() })
+      .where(eq(companies.id, companyId))
+      .returning();
+
+    // Update all application IDs for this company
+    const companyApplications = await db
+      .select()
+      .from(applications)
+      .where(eq(applications.companyId, companyId));
+
+    for (const app of companyApplications) {
+      // Replace old shortname with new shortname in application ID
+      const newApplicationId = app.applicationId.replace(oldShortName, newShortName);
+      
+      await db
+        .update(applications)
+        .set({ applicationId: newApplicationId, updatedAt: new Date() })
+        .where(eq(applications.id, app.id));
+    }
+
+    return {
+      company: updatedCompany,
+      updatedApplications: companyApplications.length
+    };
+  }
+
+  async getUsersByCompanyId(companyId: number): Promise<any[]> {
+    return await db
+      .select()
+      .from(users)
+      .where(eq(users.companyId, companyId))
+      .orderBy(users.createdAt);
+  }
+
+  async getFacilitiesByCompanyId(companyId: number): Promise<any[]> {
+    return await db
+      .select()
+      .from(facilities)
+      .where(eq(facilities.companyId, companyId))
+      .orderBy(facilities.createdAt);
+  }
+
+  async getApplicationsByCompanyId(companyId: number): Promise<any[]> {
+    return await db
+      .select()
+      .from(applications)
+      .where(eq(applications.companyId, companyId))
+      .orderBy(applications.createdAt);
+  }
+
+  async getFacilitiesByCompanyForAdmin(companyId: number): Promise<{ id: number; name: string; naicsCode: string | null; }[]> {
+    return await db
+      .select({
+        id: facilities.id,
+        name: facilities.name,
+        naicsCode: facilities.naicsCode
+      })
+      .from(facilities)
+      .where(eq(facilities.companyId, companyId))
+      .orderBy(facilities.name);
+  }
+
+  async getNextApplicationNumber(companyId: number, activityType: string): Promise<number> {
+    // This method is deprecated - use generateApplicationId instead
+    throw new Error('getNextApplicationNumber is deprecated - use generateApplicationId for consistent ID generation');
+  }
+
   // Application operations
   async createApplication(application: InsertApplication): Promise<Application> {
     const [newApplication] = await db
       .insert(applications)
-      .values(application)
+      .values([application])
       .returning();
     return newApplication;
   }
@@ -378,7 +754,8 @@ export class DatabaseStorage implements IStorage {
   }
 
   async getAllApplications(): Promise<any[]> {
-    const appsWithFacilities = await db
+    console.log('getAllApplications - Starting data retrieval');
+    const appsWithDetails = await db
       .select({
         id: applications.id,
         applicationId: applications.applicationId,
@@ -392,41 +769,87 @@ export class DatabaseStorage implements IStorage {
         updatedAt: applications.updatedAt,
         facilityId: applications.facilityId,
         companyId: applications.companyId,
-        facilityName: facilities.name,
+        reviewNotes: applications.reviewNotes,
+        reviewedBy: applications.reviewedBy,
+        reviewedAt: applications.reviewedAt,
+        // Company details
         companyName: companies.name,
+        companyShortName: companies.shortName,
+        // Facility details
+        facilityName: facilities.name,
+        // Submitter details
+        submitterFirstName: users.firstName,
+        submitterLastName: users.lastName,
+        submitterEmail: users.email
       })
       .from(applications)
       .leftJoin(facilities, eq(applications.facilityId, facilities.id))
       .leftJoin(companies, eq(applications.companyId, companies.id))
+      .leftJoin(users, eq(applications.submittedBy, users.id))
       .orderBy(desc(applications.createdAt));
+    
+    console.log('DEBUG: First app raw result:', JSON.stringify(appsWithDetails[0], null, 2));
     
     // Get submission data for each application to determine detailed status
     const appsWithSubmissions = await Promise.all(
-      appsWithFacilities.map(async (app) => {
+      appsWithDetails.map(async (app) => {
         const submissions = await this.getApplicationSubmissions(app.id);
         const hasPreActivity = submissions.some(s => s.phase === 'pre_activity');
         const hasPostActivity = submissions.some(s => s.phase === 'post_activity');
         
-        let detailedStatus = 'draft';
+        let detailedStatus = 'Draft';
         
         // Determine workflow status based on submissions and application status
         if (hasPostActivity) {
-          detailedStatus = 'post-activity-submitted';
+          detailedStatus = 'PostActivity Submitted';
         } else if (hasPreActivity) {
           if (app.status === 'under_review') {
-            detailedStatus = 'post-activity-started';
+            detailedStatus = 'PostActivity Started';
           } else {
-            detailedStatus = 'pre-activity-submitted';
+            detailedStatus = 'PreActivity Submitted';
           }
         } else if (app.status === 'under_review') {
-          detailedStatus = 'pre-activity-started';
+          detailedStatus = 'PreActivity Started';
+        } else if (submissions.length > 0) {
+          // Check for specific template names from form_templates
+          const submissionData = await Promise.all(
+            submissions.map(async (s) => {
+              const template = await db
+                .select({ name: formTemplates.name })
+                .from(formTemplates)
+                .where(eq(formTemplates.id, s.templateId))
+                .limit(1);
+              return template[0]?.name || 'Activity';
+            })
+          );
+          
+          const templateNames = submissionData.join(', ');
+          if (templateNames.includes('TEst')) {
+            detailedStatus = app.status === 'submitted' ? 'TEst Submitted' : 'TEst Started';
+          } else if (templateNames.includes('PreActivity')) {
+            detailedStatus = app.status === 'submitted' ? 'PreActivity Submitted' : 'PreActivity Started';
+          }
         }
         
         return {
           ...app,
           detailedStatus,
-          facility: app.facilityName ? { name: app.facilityName } : null,
-          company: app.companyName ? { name: app.companyName } : null
+          // Keep both formats for compatibility
+          companyName: app.companyName,
+          companyShortName: app.companyShortName,
+          facilityName: app.facilityName,
+          company: app.companyName ? {
+            id: app.companyId,
+            name: app.companyName,
+            shortName: app.companyShortName
+          } : null,
+          facility: app.facilityName ? {
+            id: app.facilityId,
+            name: app.facilityName
+          } : null,
+          submitterName: app.submitterFirstName && app.submitterLastName 
+            ? `${app.submitterFirstName} ${app.submitterLastName}`
+            : app.submitterEmail || 'Unknown'
         };
       })
     );
@@ -441,8 +864,13 @@ export class DatabaseStorage implements IStorage {
     return await this.getApplicationsByCompany(user.companyId);
   }
 
+  async getAllApplicationsByFacility(facilityId: number): Promise<Application[]> {
+    const apps = await db.select().from(applications).where(eq(applications.facilityId, facilityId));
+    return apps;
+  }
+
   async getApplicationsByFacilityAndActivity(facilityId: number, activityType: string): Promise<Application[]> {
-    return await db
+    const results = await db
       .select()
       .from(applications)
       .where(
@@ -452,6 +880,9 @@ export class DatabaseStorage implements IStorage {
         )
       )
       .orderBy(desc(applications.createdAt));
+    
+    console.log(`[STORAGE] Found ${results.length} existing ${activityType} applications for facility ${facilityId}`);
+    return results;
   }
 
   async updateApplication(id: number, updates: Partial<InsertApplication>): Promise<Application> {
@@ -471,31 +902,72 @@ export class DatabaseStorage implements IStorage {
       throw new Error("Company or facility not found");
     }
 
-    // Activity type codes
-    const activityCodes: Record<string, string> = {
-      FRA: "1",
-      CES: "2", 
-      SEM: "3",
-      EMIS: "4",
-      CR: "5"
-    };
-
-    const activityCode = activityCodes[activityType] || "1";
-
-    // Get next application number for this facility and activity
-    const existingApps = await db
-      .select()
-      .from(applications)
-      .where(
-        and(
-          eq(applications.facilityId, facilityId),
-          eq(applications.activityType, activityType as any)
-        )
-      );
-
-    const nextNumber = String(existingApps.length + 1).padStart(2, "0");
+    // Generate facility code based on position among company facilities  
+    const companyFacilities = await this.getFacilitiesByCompany(companyId);
+    const facilityIndex = companyFacilities.findIndex(f => f.id === facilityId);
+    const facilityCode = String(facilityIndex + 1).padStart(3, '0');
     
-    return `${company.shortName}-${facility.code}-${activityCode}${nextNumber}`;
+    // Activity ID mapping per specification: 1=FRA, 2=EAA, 3=SEM, 4=EMIS, 5=CR
+    const activityId = activityType === 'FRA' ? '1' : 
+                      activityType === 'EAA' ? '2' : 
+                      activityType === 'SEM' ? '3' : 
+                      activityType === 'EMIS' ? '4' : 
+                      activityType === 'CR' ? '5' : '1';
+    
+    // Find the next available application number for this specific activity type at this facility
+    const existingAppsForActivity = await this.getApplicationsByFacilityAndActivity(facilityId, activityType);
+    
+    // Get ALL existing applications GLOBALLY to prevent any ID reuse anywhere in the system
+    const allGlobalApps = await db.select({ applicationId: applications.applicationId }).from(applications);
+    
+    // Get ghost IDs to avoid reusing them - CRITICAL for preventing deleted ID reuse
+    const ghostIds = await this.getGhostApplicationIds();
+    
+    // Create comprehensive set of ALL IDs that have ever been used anywhere
+    const usedIds = new Set([
+      ...allGlobalApps.map(app => app.applicationId), // All existing IDs globally
+      ...ghostIds.map(ghost => ghost.applicationId) // All ghost IDs (deleted applications)
+    ]);
+    
+    console.log(`[GHOST DEBUG] Ghost IDs in system:`, ghostIds.map(g => g.applicationId));
+    console.log(`[GHOST DEBUG] Total protected IDs:`, Array.from(usedIds).sort());
+    
+    console.log(`[COLLISION DEBUG] Activity: ${activityType}, Existing for this activity: ${existingAppsForActivity.length}`);
+    console.log(`[COLLISION DEBUG] All global used IDs:`, Array.from(usedIds).sort());
+    console.log(`[COLLISION DEBUG] Looking for next available ID with format: ${company.shortName}-${facilityCode}-${activityId}XX`);
+    
+    // Find the next available application number that doesn't conflict with ANY used ID globally
+    let appNumber = 1;
+    let testAppId: string;
+    let iterations = 0;
+    
+    do {
+      const appNumberStr = String(appNumber).padStart(2, '0');
+      testAppId = `${company.shortName}-${facilityCode}-${activityId}${appNumberStr}`;
+      
+      console.log(`[COLLISION CHECK] Testing ID: ${testAppId}, Used: ${usedIds.has(testAppId)}`);
+      
+      if (!usedIds.has(testAppId)) {
+        break;
+      }
+      
+      appNumber++;
+      iterations++;
+      
+      // Safety check to prevent infinite loops
+      if (iterations > 100) {
+        console.error(`[ERROR] Too many collision detection iterations for ${testAppId}`);
+        break;
+      }
+    } while (true);
+    
+    const finalAppNumber = appNumber;
+    const appNumberStr = String(finalAppNumber).padStart(2, '0');
+    const finalApplicationId = `${company.shortName}-${facilityCode}-${activityId}${appNumberStr}`;
+    
+    console.log(`[COLLISION RESULT] Final ID: ${finalApplicationId} (checked ${iterations} iterations)`);
+    
+    return finalApplicationId;
   }
 
   // Document operations
@@ -513,11 +985,50 @@ export class DatabaseStorage implements IStorage {
   }
 
   async getDocumentsByCompany(companyId: number): Promise<Document[]> {
-    return await db
+    // Get documents directly associated with the company
+    const companyDocuments = await db
       .select()
       .from(documents)
       .where(eq(documents.companyId, companyId))
       .orderBy(desc(documents.createdAt));
+
+    // Get documents from applications assigned to contractor companies
+    // where the main company is the one that owns the application
+    const contractorDocuments = await db
+      .select({
+        id: documents.id,
+        applicationId: documents.applicationId,
+        companyId: documents.companyId,
+        filename: documents.filename,
+        originalName: documents.originalName,
+        mimeType: documents.mimeType,
+        size: documents.size,
+        documentType: documents.documentType,
+        isTemplate: documents.isTemplate,
+        isGlobal: documents.isGlobal,
+        uploadedBy: documents.uploadedBy,
+        filePath: documents.filePath,
+        createdAt: documents.createdAt
+      })
+      .from(documents)
+      .innerJoin(applications, eq(documents.applicationId, applications.id))
+      .where(
+        and(
+          eq(applications.companyId, companyId),  // Application belongs to this company
+          sql`${documents.companyId} != ${companyId}`  // But document was uploaded by different company (contractor)
+        )
+      )
+      .orderBy(desc(documents.createdAt));
+
+    // Combine and deduplicate documents
+    const allDocuments = [...companyDocuments, ...contractorDocuments];
+    const uniqueDocuments = allDocuments.filter((doc, index, self) => 
+      self.findIndex(d => d.id === doc.id) === index
+    );
+
+    return uniqueDocuments.sort((a, b) => 
+      new Date(b.createdAt!).getTime() - new Date(a.createdAt!).getTime()
+    );
   }
 
   async getAllDocuments(): Promise<Document[]> {
@@ -544,6 +1055,179 @@ export class DatabaseStorage implements IStorage {
     await db.delete(documents).where(eq(documents.id, id));
   }
 
+  async deleteApplication(id: number): Promise<void> {
+    // First get the application to store it as a ghost ID
+    const app = await this.getApplicationById(id);
+    if (app) {
+      // Store as ghost ID before deletion
+      await db.execute(sql`
+        INSERT INTO ghost_application_ids (application_id, company_id, facility_id, activity_type, original_title, deleted_at)
+        VALUES (${app.applicationId}, ${app.companyId}, ${app.facilityId}, ${app.activityType}, ${app.title}, NOW())
+        ON CONFLICT (application_id) DO UPDATE SET deleted_at = NOW()
+      `);
+    }
+    
+    // Delete related records first to maintain referential integrity
+    await db.delete(messages).where(eq(messages.applicationId, id));
+    await db.delete(applicationSubmissions).where(eq(applicationSubmissions.applicationId, id));
+    await db.delete(documents).where(eq(documents.applicationId, id));
+    await db.delete(applicationAssignments).where(eq(applicationAssignments.applicationId, id));
+    
+    // Finally delete the application itself
+    await db.delete(applications).where(eq(applications.id, id));
+  }
+
+  async getGhostApplicationIds(companyId?: number): Promise<any[]> {
+    console.log(`[GHOST DEBUG] Getting ghost IDs, companyId filter: ${companyId}`);
+    
+    try {
+      let result;
+      if (companyId) {
+        result = await db
+          .select({
+            id: ghostApplicationIds.id,
+            applicationId: ghostApplicationIds.applicationId,
+            companyId: ghostApplicationIds.companyId,
+            facilityId: ghostApplicationIds.facilityId,
+            activityType: ghostApplicationIds.activityType,
+            originalTitle: ghostApplicationIds.originalTitle,
+            deletedAt: ghostApplicationIds.deletedAt,
+            companyName: companies.name,
+            companyShortName: companies.shortName,
+            facilityName: facilities.name,
+          })
+          .from(ghostApplicationIds)
+          .leftJoin(companies, eq(ghostApplicationIds.companyId, companies.id))
+          .leftJoin(facilities, eq(ghostApplicationIds.facilityId, facilities.id))
+          .where(eq(ghostApplicationIds.companyId, companyId))
+          .orderBy(ghostApplicationIds.applicationId);
+      } else {
+        result = await db
+          .select({
+            id: ghostApplicationIds.id,
+            applicationId: ghostApplicationIds.applicationId,
+            companyId: ghostApplicationIds.companyId,
+            facilityId: ghostApplicationIds.facilityId,
+            activityType: ghostApplicationIds.activityType,
+            originalTitle: ghostApplicationIds.originalTitle,
+            deletedAt: ghostApplicationIds.deletedAt,
+            companyName: companies.name,
+            companyShortName: companies.shortName,
+            facilityName: facilities.name,
+          })
+          .from(ghostApplicationIds)
+          .leftJoin(companies, eq(ghostApplicationIds.companyId, companies.id))
+          .leftJoin(facilities, eq(ghostApplicationIds.facilityId, facilities.id))
+          .orderBy(ghostApplicationIds.applicationId);
+      }
+      
+      console.log(`[GHOST DEBUG] Found ${result.length} ghost IDs:`, result.map(g => g.applicationId));
+      return result;
+    } catch (error) {
+      console.error(`[GHOST DEBUG] Error accessing ghost IDs (table may not exist yet):`, error);
+      // Return empty array if table doesn't exist yet, don't block application creation
+      return [];
+    }
+  }
+
+  async clearGhostApplicationId(applicationId: string): Promise<void> {
+    try {
+      await db.delete(ghostApplicationIds).where(eq(ghostApplicationIds.applicationId, applicationId));
+      console.log(`[GHOST DEBUG] Cleared ghost application ID: ${applicationId}`);
+    } catch (error) {
+      console.error(`[GHOST DEBUG] Error clearing ghost ID ${applicationId}:`, error);
+      // Don't throw error if table doesn't exist yet
+    }
+  }
+
+  async bulkClearGhostApplicationIds(applicationIds: string[]): Promise<number> {
+    try {
+      console.log(`[GHOST DEBUG] Bulk clearing ${applicationIds.length} ghost application IDs:`, applicationIds);
+      
+      let clearedCount = 0;
+      for (const applicationId of applicationIds) {
+        try {
+          const result = await db
+            .delete(ghostApplicationIds)
+            .where(eq(ghostApplicationIds.applicationId, applicationId))
+            .returning();
+          
+          if (result.length > 0) {
+            clearedCount++;
+            console.log(`[GHOST DEBUG] Successfully cleared: ${applicationId}`);
+          } else {
+            console.log(`[GHOST DEBUG] Ghost ID not found: ${applicationId}`);
+          }
+        } catch (error) {
+          console.error(`[GHOST DEBUG] Error clearing individual ghost ID ${applicationId}:`, error);
+        }
+      }
+      
+      console.log(`[GHOST DEBUG] Bulk clear completed: ${clearedCount}/${applicationIds.length} successfully cleared`);
+      return clearedCount;
+    } catch (error) {
+      console.error(`[GHOST DEBUG] Error in bulk clear operation:`, error);
+      return 0;
+    }
+  }
+
+  async addGhostApplicationId(applicationId: string, reason: string): Promise<void> {
+    try {
+      // Extract company and facility info from application ID format: DEMO-001-101
+      const parts = applicationId.split('-');
+      if (parts.length !== 3) {
+        console.error(`[GHOST DEBUG] Invalid application ID format: ${applicationId}`);
+        return;
+      }
+
+      const [companyShort, facilityCode, activityAndNumber] = parts;
+      
+      // Get company ID from short name
+      const company = await db.select().from(companies).where(eq(companies.shortName, companyShort)).limit(1);
+      if (company.length === 0) {
+        console.error(`[GHOST DEBUG] Company not found for short name: ${companyShort}`);
+        return;
+      }
+
+      // Get facility ID from code
+      const facility = await db.select().from(facilities).where(eq(facilities.code, facilityCode)).limit(1);
+      if (facility.length === 0) {
+        console.error(`[GHOST DEBUG] Facility not found for code: ${facilityCode}`);
+        return;
+      }
+
+      // Determine activity type from ID
+      const activityId = activityAndNumber.charAt(0);
+      const activityType = activityId === '1' ? 'FRA' : 
+                          activityId === '2' ? 'CES' : 
+                          activityId === '3' ? 'SEM' : 
+                          activityId === '4' ? 'EMIS' : 
+                          activityId === '5' ? 'CR' : 'UNKNOWN';
+
+      if (activityType === 'UNKNOWN') {
+        console.error(`[GHOST DEBUG] Unknown activity type for ID: ${applicationId}`);
+        return;
+      }
+
+      await db.insert(ghostApplicationIds).values({
+        applicationId,
+        companyId: company[0].id,
+        facilityId: facility[0].id,
+        activityType: activityType as any,
+        originalTitle: reason,
+        deletedAt: new Date()
+      }).onConflictDoUpdate({
+        target: ghostApplicationIds.applicationId,
+        set: { deletedAt: new Date(), originalTitle: reason }
+      });
+
+      console.log(`[GHOST DEBUG] Added ghost application ID: ${applicationId} - ${reason}`);
+    } catch (error) {
+      console.error(`[GHOST DEBUG] Error adding ghost ID ${applicationId}:`, error);
+      // Don't throw error if table doesn't exist yet
+    }
+  }
+
   // Team management
   async getUsersByCompany(companyId: number): Promise<User[]> {
     return await db
@@ -551,6 +1235,14 @@ export class DatabaseStorage implements IStorage {
       .from(users)
       .where(and(eq(users.companyId, companyId), eq(users.isActive, true)))
       .orderBy(users.firstName, users.lastName);
+  }
+
+  async getUserById(userId: string): Promise<User | undefined> {
+    const [user] = await db
+      .select()
+      .from(users)
+      .where(eq(users.id, userId));
+    return user;
   }
 
   async updateUserRole(userId: string, role: string): Promise<User> {
@@ -627,12 +1319,19 @@ export class DatabaseStorage implements IStorage {
     return await db.select().from(activitySettings).orderBy(activitySettings.activityType);
   }
 
-  async updateActivitySetting(activityType: string, isEnabled: boolean, updatedBy: string): Promise<ActivitySettings> {
+  async updateActivitySetting(activityType: string, updates: { 
+    isEnabled?: boolean; 
+    maxApplications?: number; 
+    description?: string; 
+    allowContractorAssignment?: boolean;
+    contractorFilterType?: string;
+    requiredContractorActivities?: string[];
+    updatedBy: string 
+  }): Promise<ActivitySettings> {
     const [settings] = await db
       .update(activitySettings)
       .set({ 
-        isEnabled, 
-        updatedBy, 
+        ...updates,
         updatedAt: new Date() 
       })
       .where(eq(activitySettings.activityType, activityType as any))
@@ -640,14 +1339,80 @@ export class DatabaseStorage implements IStorage {
     return settings;
   }
 
-  // Admin operations
-  async getAllUsers(): Promise<User[]> {
-    return await db.select().from(users).orderBy(users.createdAt);
+  // Facility-specific activity settings
+  async getFacilityActivitySettings(facilityId: number): Promise<any[]> {
+    return await db
+      .select()
+      .from(facilityActivitySettings)
+      .where(eq(facilityActivitySettings.facilityId, facilityId));
   }
 
-  async getAllApplications(): Promise<Application[]> {
-    return await db.select().from(applications).orderBy(desc(applications.createdAt));
+  async updateFacilityActivitySetting(facilityId: number, activityType: string, isEnabled: boolean): Promise<any> {
+    // Try to update existing record first
+    const existing = await db
+      .select()
+      .from(facilityActivitySettings)
+      .where(
+        and(
+          eq(facilityActivitySettings.facilityId, facilityId),
+          eq(facilityActivitySettings.activityType, activityType as any)
+        )
+      )
+      .limit(1);
+
+    if (existing.length > 0) {
+      // Update existing record
+      const [updated] = await db
+        .update(facilityActivitySettings)
+        .set({
+          isEnabled,
+          updatedAt: new Date()
+        })
+        .where(
+          and(
+            eq(facilityActivitySettings.facilityId, facilityId),
+            eq(facilityActivitySettings.activityType, activityType as any)
+          )
+        )
+        .returning();
+      return updated;
+    } else {
+      // Create new record
+      const [created] = await db
+        .insert(facilityActivitySettings)
+        .values({
+          facilityId,
+          activityType: activityType as any,
+          isEnabled,
+          enabledBy: 'system_admin', // This should be the actual admin user ID
+          enabledAt: new Date(),
+          updatedAt: new Date()
+        })
+        .returning();
+      return created;
+    }
   }
+
+  // Admin operations
+  async getAllUsers(): Promise<User[]> {
+    try {
+      const allUsers = await db.select().from(users).orderBy(users.createdAt);
+      console.log('Storage getAllUsers() found:', allUsers.length, 'users');
+      return allUsers;
+    } catch (error) {
+      console.error('Error in getAllUsers():', error);
+      return [];
+    }
+  }
+
+  async getCompanyUsers(companyId: number): Promise<User[]> {
+    return await db.select().from(users).where(eq(users.companyId, companyId));
+  }
+
+  // This method has been replaced by the enriched version below
+  // async getAllApplications(): Promise<Application[]> {
+  //   return await db.select().from(applications).orderBy(desc(applications.createdAt));
+  // }
 
   async getApplicationStats(): Promise<any> {
     const stats = await db
@@ -689,7 +1454,85 @@ export class DatabaseStorage implements IStorage {
     return submission;
   }
 
-  // Form template operations
+  // Activity template operations (new flexible system)
+  async createActivityTemplate(template: InsertActivityTemplate): Promise<ActivityTemplate> {
+    const [created] = await db
+      .insert(activityTemplates)
+      .values(template)
+      .returning();
+    return created;
+  }
+
+  async getActivityTemplates(activityType: string): Promise<ActivityTemplate[]> {
+    return await db
+      .select()
+      .from(activityTemplates)
+      .where(and(
+        eq(activityTemplates.activityType, activityType as any),
+        eq(activityTemplates.isActive, true)
+      ))
+      .orderBy(activityTemplates.displayOrder);
+  }
+
+  async getAllActivityTemplates(): Promise<ActivityTemplate[]> {
+    return await db
+      .select()
+      .from(activityTemplates)
+      .where(eq(activityTemplates.isActive, true))
+      .orderBy(activityTemplates.activityType, activityTemplates.displayOrder);
+  }
+
+  async updateActivityTemplate(id: number, updates: Partial<InsertActivityTemplate>): Promise<ActivityTemplate> {
+    const [updated] = await db
+      .update(activityTemplates)
+      .set({ ...updates, updatedAt: new Date() })
+      .where(eq(activityTemplates.id, id))
+      .returning();
+    return updated;
+  }
+
+  async deleteActivityTemplate(id: number): Promise<void> {
+    await db
+      .update(activityTemplates)
+      .set({ isActive: false, updatedAt: new Date() })
+      .where(eq(activityTemplates.id, id));
+  }
+
+  async getActivityTemplateById(id: number): Promise<ActivityTemplate | undefined> {
+    const [template] = await db
+      .select()
+      .from(activityTemplates)
+      .where(eq(activityTemplates.id, id));
+    return template;
+  }
+
+  // Activity template submission operations
+  async createActivityTemplateSubmission(submission: InsertActivityTemplateSubmission): Promise<ActivityTemplateSubmission> {
+    const [created] = await db
+      .insert(activityTemplateSubmissions)
+      .values(submission)
+      .returning();
+    return created;
+  }
+
+  async getActivityTemplateSubmissions(applicationId: number): Promise<ActivityTemplateSubmission[]> {
+    return await db
+      .select()
+      .from(activityTemplateSubmissions)
+      .where(eq(activityTemplateSubmissions.applicationId, applicationId))
+      .orderBy(activityTemplateSubmissions.submittedAt);
+  }
+
+  async updateActivityTemplateSubmission(id: number, updates: Partial<InsertActivityTemplateSubmission>): Promise<ActivityTemplateSubmission> {
+    const [updated] = await db
+      .update(activityTemplateSubmissions)
+      .set({ ...updates, updatedAt: new Date() })
+      .where(eq(activityTemplateSubmissions.id, id))
+      .returning();
+    return updated;
+  }
+
+  // Form template operations (legacy)
   async createFormTemplate(template: InsertFormTemplate): Promise<FormTemplate> {
     const [created] = await db
       .insert(formTemplates)
@@ -705,8 +1548,55 @@ export class DatabaseStorage implements IStorage {
       .where(eq(formTemplates.activityType, activityType as any));
   }
 
+  async getFormTemplatesByActivity(activityType: string): Promise<FormTemplate[]> {
+    return await db
+      .select()
+      .from(formTemplates)
+      .where(eq(formTemplates.activityType, activityType as any));
+  }
+
   async getAllFormTemplates(): Promise<FormTemplate[]> {
-    return await db.select().from(formTemplates);
+    try {
+      const templates = await db.select().from(formTemplates).orderBy(formTemplates.createdAt);
+      
+      // Parse form_fields JSON and ensure proper field mapping
+      return templates.map(template => {
+        let parsedFields = [];
+        
+        // Parse the formFields JSON string from database
+        if (template.formFields) {
+          try {
+            if (typeof template.formFields === 'string') {
+              parsedFields = JSON.parse(template.formFields);
+            } else if (Array.isArray(template.formFields)) {
+              parsedFields = template.formFields;
+            }
+          } catch (e) {
+            console.error('Error parsing form fields for template', template.id, ':', e);
+            parsedFields = [];
+          }
+        }
+        
+        return {
+          ...template,
+          fields: parsedFields,
+          form_fields: parsedFields,
+          // Ensure we have a proper field count
+          fieldCount: Array.isArray(parsedFields) ? parsedFields.length : 0
+        };
+      });
+    } catch (error) {
+      console.error('Error fetching form templates:', error);
+      return [];
+    }
+  }
+
+  async getFormTemplateById(id: number): Promise<FormTemplate | undefined> {
+    const [template] = await db
+      .select()
+      .from(formTemplates)
+      .where(eq(formTemplates.id, id));
+    return template;
   }
 
   async updateFormTemplate(id: number, updates: Partial<InsertFormTemplate>): Promise<FormTemplate> {
@@ -718,8 +1608,97 @@ export class DatabaseStorage implements IStorage {
     return updated;
   }
 
+  async deleteFormTemplate(id: number): Promise<void> {
+    await db.delete(formTemplates).where(eq(formTemplates.id, id));
+  }
+
+  async checkFormTemplateHasSubmissions(templateId: number): Promise<boolean> {
+    // Check if any applications have used this template
+    // For now, return false to allow deletion - can be enhanced later to check actual submissions
+    return false;
+  }
+
   async getApplication(id: number): Promise<Application | undefined> {
     return this.getApplicationById(id);
+  }
+
+  async createFormSubmission(submission: InsertApplicationSubmission): Promise<ApplicationSubmission> {
+    const [created] = await db
+      .insert(applicationSubmissions)
+      .values(submission)
+      .returning();
+    return created;
+  }
+
+  // APPLICATION SUPPORT METHODS
+  // ===========================
+  // These methods support the application endpoints - DO NOT REMOVE
+
+  async getApplicationAssignedContractors(applicationId: number): Promise<any[]> {
+    try {
+      const assignments = await db
+        .select({
+          contractorId: applicationAssignments.contractorUserId,
+          assignedAt: applicationAssignments.assignedAt,
+          permissions: applicationAssignments.permissions,
+          contractor: {
+            id: users.id,
+            firstName: users.firstName,
+            lastName: users.lastName,
+            email: users.email,
+            companyId: users.companyId
+          }
+        })
+        .from(applicationAssignments)
+        .leftJoin(users, eq(applicationAssignments.contractorUserId, users.id))
+        .where(eq(applicationAssignments.applicationId, applicationId));
+      
+      return assignments;
+    } catch (error) {
+      console.error('Error fetching assigned contractors:', error);
+      return [];
+    }
+  }
+
+  async getApplicationDocuments(applicationId: number): Promise<any[]> {
+    try {
+      const docs = await db
+        .select()
+        .from(documents)
+        .where(eq(documents.applicationId, applicationId))
+        .orderBy(desc(documents.uploadedAt));
+      
+      return docs;
+    } catch (error) {
+      console.error('Error fetching application documents:', error);
+      return [];
+    }
+  }
+
+  async startApplicationPhase(applicationId: number, phase: string, userId: string): Promise<any> {
+    try {
+      // Update application status to reflect phase start
+      const statusMap: { [key: string]: string } = {
+        'pre_activity': 'under_review',
+        'post_activity': 'under_review'
+      };
+      
+      const newStatus = statusMap[phase] || 'under_review';
+      
+      const [updated] = await db
+        .update(applications)
+        .set({ 
+          status: newStatus as any,
+          updatedAt: new Date()
+        })
+        .where(eq(applications.id, applicationId))
+        .returning();
+      
+      return { success: true, application: updated };
+    } catch (error) {
+      console.error('Error starting application phase:', error);
+      throw error;
+    }
   }
 
   // Messaging operations
@@ -981,6 +1960,435 @@ export class DatabaseStorage implements IStorage {
       .where(eq(messages.id, messageId));
   }
 
+  async getAllMessagesWithContext(): Promise<any[]> {
+    return await db
+      .select({
+        id: messages.id,
+        fromUserId: messages.fromUserId,
+        toUserId: messages.toUserId,
+        subject: messages.subject,
+        message: messages.message,
+        isRead: messages.isRead,
+        isAdminMessage: messages.isAdminMessage,
+        isResolved: messages.isResolved,
+        isArchived: messages.isArchived,
+        isDeleted: messages.isDeleted,
+        status: messages.status,
+        priority: messages.priority,
+        ticketNumber: messages.ticketNumber,
+        parentMessageId: messages.parentMessageId,
+        applicationId: messages.applicationId,
+        createdAt: messages.createdAt,
+        updatedAt: messages.updatedAt,
+        fromUser: {
+          id: users.id,
+          email: users.email,
+          firstName: users.firstName,
+          lastName: users.lastName,
+          companyId: users.companyId,
+          role: users.role,
+        },
+        company: {
+          id: companies.id,
+          name: companies.name,
+          shortName: companies.shortName,
+          phone: companies.phone,
+          address: companies.address,
+        },
+        application: {
+          id: applications.id,
+          applicationId: applications.applicationId,
+          title: applications.title,
+          status: applications.status,
+          activityType: applications.activityType,
+          facilityName: facilities.name,
+        }
+      })
+      .from(messages)
+      .leftJoin(users, eq(messages.fromUserId, users.id))
+      .leftJoin(companies, eq(users.companyId, companies.id))
+      .leftJoin(applications, eq(messages.applicationId, applications.id))
+      .leftJoin(facilities, eq(applications.facilityId, facilities.id))
+      .where(eq(messages.isDeleted, false))
+      .orderBy(desc(messages.createdAt));
+  }
+
+  async updateTicketPriority(ticketNumber: string, priority: string): Promise<void> {
+    await db
+      .update(messages)
+      .set({ priority, updatedAt: new Date() })
+      .where(eq(messages.ticketNumber, ticketNumber));
+  }
+
+  async resolveTicket(ticketNumber: string): Promise<void> {
+    await db
+      .update(messages)
+      .set({ isResolved: true, status: 'resolved', updatedAt: new Date() })
+      .where(eq(messages.ticketNumber, ticketNumber));
+  }
+
+  async getAdminUsers(): Promise<any[]> {
+    try {
+      console.log('=== STARTING getAdminUsers QUERY ===');
+      
+      // First test: Simple user query without JOIN
+      const simpleUsers = await db.select().from(users).limit(2);
+      console.log('Simple users query result:', simpleUsers.length > 0 ? {
+        email: simpleUsers[0].email,
+        companyId: simpleUsers[0].companyId
+      } : 'No users found');
+      
+      // Second test: Simple companies query
+      const simpleCompanies = await db.select().from(companies).limit(2);
+      console.log('Simple companies query result:', simpleCompanies.length > 0 ? {
+        name: simpleCompanies[0].name,
+        shortName: simpleCompanies[0].shortName
+      } : 'No companies found');
+      
+      // DIRECT OBJECT CONSTRUCTION APPROACH
+      console.log('=== DIRECT OBJECT CONSTRUCTION ===');
+      
+      // Get all users
+      const userResults = await db.select().from(users).orderBy(users.createdAt);
+      console.log('Users retrieved:', userResults.length);
+      
+      // Process each user and add company data individually
+      const result = [];
+      
+      for (const user of userResults) {
+        // Create base user object
+        const enrichedUser: any = {
+          id: user.id,
+          firstName: user.firstName,
+          lastName: user.lastName,
+          email: user.email,
+          role: user.role,
+          permissionLevel: user.permissionLevel,
+          isActive: user.isActive,
+          isEmailVerified: user.isEmailVerified,
+          emailVerifiedAt: user.emailVerifiedAt,
+          createdAt: user.createdAt,
+          updatedAt: user.updatedAt,
+          companyId: user.companyId,
+          businessMobile: user.businessMobile,
+          profileImageUrl: user.profileImageUrl,
+          hearAboutUs: user.hearAboutUs,
+          hearAboutUsOther: user.hearAboutUsOther,
+          companyName: null,
+          companyShortName: null,
+          isContractor: null
+        };
+        
+        if (user.companyId) {
+          try {
+            // Get company data directly for each user
+            const companyData = await db
+              .select({
+                name: companies.name,
+                shortName: companies.shortName,
+                isContractor: companies.isContractor
+              })
+              .from(companies)
+              .where(eq(companies.id, user.companyId))
+              .limit(1);
+            
+            if (companyData.length > 0) {
+              enrichedUser.companyName = companyData[0].name;
+              enrichedUser.companyShortName = companyData[0].shortName;
+              enrichedUser.isContractor = companyData[0].isContractor;
+              console.log(`Enriched user ${user.email} with company ${companyData[0].name}`);
+            }
+          } catch (error) {
+            console.error(`Error fetching company for user ${user.email}:`, error);
+          }
+        }
+        
+        result.push(enrichedUser);
+      }
+      
+      console.log('Direct enrichment complete. Sample user with company:');
+      const sampleUserWithCompany = result.find(u => u.companyId);
+      if (sampleUserWithCompany) {
+        console.log({
+          email: sampleUserWithCompany.email,
+          companyId: sampleUserWithCompany.companyId,
+          companyName: sampleUserWithCompany.companyName,
+          isContractor: sampleUserWithCompany.isContractor
+        });
+      }
+      
+      console.log('Merge complete, checking first user with company...');
+      const userWithCompany = result.find(u => u.companyId);
+      if (userWithCompany) {
+        console.log('Sample user:', {
+          email: userWithCompany.email,
+          companyId: userWithCompany.companyId,
+          companyName: userWithCompany.companyName,
+          isContractor: userWithCompany.isContractor
+        });
+      }
+      
+      console.log('=== RESULT VERIFICATION ===');
+      console.log('Total users returned:', result.length);
+      
+      // Verify company data retrieval
+      const usersWithCompanies = result.filter((u: any) => u.companyId !== null);
+      const usersWithCompanyNames = result.filter((u: any) => u.companyName !== null);
+      const contractorUsers = result.filter((u: any) => u.isContractor === true);
+      
+      console.log('Users with company IDs:', usersWithCompanies.length);
+      console.log('Users with company names:', usersWithCompanyNames.length);
+      console.log('Contractor users:', contractorUsers.length);
+      
+      if (usersWithCompanyNames.length > 0) {
+        const sample = usersWithCompanyNames[0];
+        console.log('=== SUCCESS: COMPANY DATA ENRICHMENT WORKING ===');
+        console.log('Email:', sample.email);
+        console.log('Company:', sample.companyName, '(' + sample.companyShortName + ')');
+        console.log('Contractor:', sample.isContractor);
+      } else {
+        console.log('=== ISSUE: NO COMPANY DATA ENRICHED ===');
+        if (usersWithCompanies.length > 0) {
+          console.log('Sample user with company ID but no name:', {
+            email: usersWithCompanies[0].email,
+            companyId: usersWithCompanies[0].companyId,
+            companyName: usersWithCompanies[0].companyName
+          });
+        }
+      }
+      
+      return result;
+    } catch (error) {
+      console.error('Error in getAdminUsers query:', error);
+      throw error;
+    }
+  }
+
+  // Admin user management methods
+  async createAdminUser(userData: UpsertUser): Promise<User> {
+    const [user] = await db
+      .insert(users)
+      .values(userData)
+      .returning();
+    return user;
+  }
+
+  async updateAdminUser(id: string, updates: Partial<UpsertUser>): Promise<User> {
+    const [user] = await db
+      .update(users)
+      .set({ ...updates, updatedAt: new Date() })
+      .where(eq(users.id, id))
+      .returning();
+    return user;
+  }
+
+  async deleteAdminUser(id: string): Promise<void> {
+    // First, delete any documents uploaded by this user
+    await db
+      .delete(documents)
+      .where(eq(documents.uploadedBy, id));
+    
+    // Update any applications that reference this user to set submitted_by to NULL
+    await db
+      .update(applications)
+      .set({ submittedBy: null })
+      .where(eq(applications.submittedBy, id));
+    
+    // Update any application submissions that reference this user
+    await db
+      .update(applicationSubmissions)
+      .set({ submittedBy: null })
+      .where(eq(applicationSubmissions.submittedBy, id));
+    
+    // Delete any team invitations that reference this user
+    await db
+      .delete(teamInvitations)
+      .where(eq(teamInvitations.invitedByUserId, id));
+    
+    // Delete any messages that reference this user
+    await db
+      .delete(messages)
+      .where(eq(messages.fromUserId, id));
+    
+    await db
+      .delete(messages)
+      .where(eq(messages.toUserId, id));
+    
+    // Delete any notifications that reference this user
+    await db
+      .delete(notifications)
+      .where(eq(notifications.userId, id));
+    
+    // Finally, delete the user
+    await db
+      .delete(users)
+      .where(eq(users.id, id));
+  }
+
+  async resetUserPassword(id: string, hashedPassword: string): Promise<User> {
+    const [user] = await db
+      .update(users)
+      .set({ password: hashedPassword, updatedAt: new Date() })
+      .where(eq(users.id, id))
+      .returning();
+    return user;
+  }
+
+  async getContractorTeamMembers(companyId: number): Promise<{ id: string; email: string; firstName: string; lastName: string; }[]> {
+    const teamMembers = await db
+      .select({
+        id: users.id,
+        email: users.email,
+        firstName: users.firstName,
+        lastName: users.lastName,
+      })
+      .from(users)
+      .where(and(
+        eq(users.companyId, companyId),
+        eq(users.role, 'contractor_team_member')
+      ));
+
+    return teamMembers.map(member => ({
+      id: member.id,
+      email: member.email || '',
+      firstName: member.firstName || '',
+      lastName: member.lastName || '',
+    }));
+  }
+
+  async getTeamInvitations(companyId: number): Promise<TeamInvitation[]> {
+    return await db
+      .select()
+      .from(teamInvitations)
+      .where(and(
+        eq(teamInvitations.companyId, companyId),
+        eq(teamInvitations.status, 'pending')
+      ));
+  }
+
+  async createContractorInvitation(data: {
+    email: string;
+    firstName: string;
+    lastName: string;
+    permissionLevel: string;
+    companyId: number;
+    invitedBy: string;
+  }): Promise<{ invitationToken: string }> {
+    const invitationToken = nanoid();
+    const expiresAt = new Date();
+    expiresAt.setDate(expiresAt.getDate() + 7); // 7 days from now
+
+    await db.insert(teamInvitations).values({
+      invitedByUserId: data.invitedBy,
+      email: data.email,
+      firstName: data.firstName,
+      lastName: data.lastName,
+      permissionLevel: data.permissionLevel,
+      companyId: data.companyId,
+      invitationToken,
+      status: 'pending',
+      expiresAt
+    });
+
+    return { invitationToken };
+  }
+
+  async removeApplicationContractorAssignments(applicationId: number): Promise<void> {
+    try {
+      console.log(`Removing existing assignments for application ${applicationId}`);
+      const result = await db
+        .delete(applicationAssignments)
+        .where(eq(applicationAssignments.applicationId, applicationId));
+      console.log(`Removed assignments result:`, result);
+    } catch (error) {
+      console.error('Error removing application assignments:', error);
+      throw error;
+    }
+  }
+
+  async getAssignedContractors(applicationId: number): Promise<any[]> {
+    try {
+      // First get the basic assignment data
+      const assignments = await db
+        .select()
+        .from(applicationAssignments)
+        .where(eq(applicationAssignments.applicationId, applicationId));
+
+      // Then get contractor details for each assignment
+      const results = [];
+      for (const assignment of assignments) {
+        // Get user details
+        const user = await db
+          .select()
+          .from(users)
+          .where(eq(users.id, assignment.userId))
+          .limit(1);
+
+        // Get company details if user found
+        let company = null;
+        if (user.length > 0 && user[0].companyId) {
+          const companyResult = await db
+            .select()
+            .from(companies)
+            .where(eq(companies.id, user[0].companyId))
+            .limit(1);
+          company = companyResult.length > 0 ? companyResult[0] : null;
+        }
+
+        const contractorData = {
+          id: assignment.id,
+          userId: assignment.userId,
+          assignedBy: assignment.assignedBy,
+          createdAt: assignment.createdAt,
+          permissions: assignment.permissions,
+          // Company fields
+          companyId: company?.id || null,
+          companyName: company?.name || null,
+          name: company?.name || null, // Add 'name' property for frontend compatibility
+          companyShortName: company?.shortName || null,
+          companyAddress: company?.address || null,
+          companyCity: company?.city || null,
+          companyProvince: company?.province || null,
+          companyPostalCode: company?.postalCode || null,
+          companyPhone: company?.phone || null,
+          // User fields
+          userFirstName: user.length > 0 ? user[0].firstName : null,
+          userLastName: user.length > 0 ? user[0].lastName : null,
+          userEmail: user.length > 0 ? user[0].email : null,
+          userBusinessMobile: user.length > 0 ? user[0].businessMobile : null
+        };
+        
+        // Only add if we haven't seen this company ID before
+        if (!results.some(r => r.companyId === contractorData.companyId)) {
+          results.push(contractorData);
+        }
+      }
+
+      return results;
+    } catch (error) {
+      console.error('Error in getAssignedContractors:', error);
+      throw error;
+    }
+  }
+
+  async checkContractorAssignment(applicationId: number, userId: string): Promise<boolean> {
+    try {
+      const assignment = await db
+        .select()
+        .from(applicationAssignments)
+        .where(and(
+          eq(applicationAssignments.applicationId, applicationId),
+          eq(applicationAssignments.userId, userId)
+        ))
+        .limit(1);
+      
+      return assignment.length > 0;
+    } catch (error) {
+      console.error('Error checking contractor assignment:', error);
+      return false;
+    }
+  }
+
   // Notification operations
   async createNotification(notification: InsertNotification): Promise<Notification> {
     const [created] = await db
@@ -1089,13 +2497,1284 @@ export class DatabaseStorage implements IStorage {
   }
 
   // Enhanced application operations
-  async updateApplicationStatus(applicationId: number, updates: { status: string; reviewNotes?: string; reviewedBy?: string; reviewedAt?: Date }): Promise<Application> {
+  async updateApplicationStatus(applicationId: number, updates: { status: string; reviewNotes?: string; reviewedBy?: string; reviewedAt?: Date }): Promise<any> {
     const [updated] = await db
       .update(applications)
-      .set(updates)
+      .set({ 
+        status: updates.status as any,
+        reviewNotes: updates.reviewNotes,
+        reviewedBy: updates.reviewedBy,
+        reviewedAt: updates.reviewedAt
+      })
       .where(eq(applications.id, applicationId))
       .returning();
     return updated;
+  }
+
+  // Contractor-specific operations
+  async getContractorCompany(companyId: number): Promise<Company | undefined> {
+    const [company] = await db
+      .select()
+      .from(companies)
+      .where(and(eq(companies.id, companyId), eq(companies.isContractor, true)));
+    return company;
+  }
+
+  async getContractorApplications(companyId: number): Promise<any[]> {
+    try {
+      console.log(`[STORAGE] getContractorApplications called for company ${companyId}`);
+      
+      // Get all users from this contractor company
+      const contractorUsers = await db
+        .select({ id: users.id })
+        .from(users)
+        .where(eq(users.companyId, companyId));
+
+      console.log(`[STORAGE] Found ${contractorUsers.length} users in company ${companyId}:`, contractorUsers.map(u => u.id));
+
+      if (contractorUsers.length === 0) {
+        console.log('[STORAGE] No users found in contractor company, returning empty array');
+        return [];
+      }
+
+      const userIds = contractorUsers.map(u => u.id);
+      console.log(`[STORAGE] Looking for applications ever assigned to contractor company`);
+
+      // Get all applications that have EVER been assigned to this contractor company
+      // Use the permanent historical tracking table
+      console.log(`[STORAGE] Querying historical assignments for company ${companyId}`);
+      const historicalResult = await db.execute(sql`
+        SELECT application_id FROM contractor_company_assignment_history 
+        WHERE contractor_company_id = ${companyId}
+      `);
+      
+      console.log(`[STORAGE] Historical result:`, JSON.stringify(historicalResult, null, 2));
+      
+      // Parse the PostgreSQL result properly - it has a rows property
+      let applicationIds: { applicationId: number }[] = [];
+      if (historicalResult && historicalResult.rows && Array.isArray(historicalResult.rows)) {
+        applicationIds = historicalResult.rows.map((row: any) => ({
+          applicationId: row.application_id
+        }));
+        console.log(`[STORAGE] Successfully parsed ${applicationIds.length} application IDs from historical result`);
+      } else {
+        console.log(`[STORAGE] Unable to parse historical result - no rows property found`);
+      }
+      console.log(`[STORAGE] Found ${applicationIds.length} unique applications ever assigned to contractor company`);
+
+      if (applicationIds.length === 0) {
+        console.log('[STORAGE] No applications ever assigned to contractor company');
+        return [];
+      }
+
+      const appIds = applicationIds.map(a => a.applicationId);
+
+      // Get application details for all these applications
+      const applicationsQuery = await db
+        .select({
+          appId: applications.id,
+          appApplicationId: applications.applicationId,
+          appTitle: applications.title,
+          appDescription: applications.description,
+          appStatus: applications.status,
+          appActivityType: applications.activityType,
+          appCreatedAt: applications.createdAt,
+          appUpdatedAt: applications.updatedAt,
+          // Facility details
+          facilityId: facilities.id,
+          facilityName: facilities.name,
+          facilityCode: facilities.code,
+          facilityDescription: facilities.description,
+          // Company details (the client company, not contractor)
+          companyId: companies.id,
+          companyName: companies.name,
+          companyShortName: companies.shortName,
+        })
+        .from(applications)
+        .innerJoin(facilities, eq(applications.facilityId, facilities.id))
+        .innerJoin(companies, eq(applications.companyId, companies.id))
+        .where(inArray(applications.id, appIds));
+
+      console.log(`[STORAGE] Retrieved details for ${applicationsQuery.length} applications`);
+
+      // Get current team member assignments for these applications (may be empty)
+      const assignments = await db
+        .select({
+          assignmentId: applicationAssignments.id,
+          applicationId: applicationAssignments.applicationId,
+          userId: applicationAssignments.userId,
+          assignedBy: applicationAssignments.assignedBy,
+          assignedDate: applicationAssignments.createdAt,
+          permissions: applicationAssignments.permissions,
+          // Assigned user details
+          assignedUserFirstName: users.firstName,
+          assignedUserLastName: users.lastName,
+          assignedUserEmail: users.email,
+        })
+        .from(applicationAssignments)
+        .innerJoin(users, eq(applicationAssignments.userId, users.id))
+        .where(and(
+          inArray(applicationAssignments.applicationId, appIds),
+          inArray(applicationAssignments.userId, userIds)
+        ));
+
+      console.log(`[STORAGE] Found ${assignments.length} current team member assignments`);
+
+      // Build application map with all assigned applications
+      const applicationMap = new Map();
+      
+      // First, add all applications (even those without current assignments)
+      applicationsQuery.forEach(app => {
+        applicationMap.set(app.appId, {
+          id: app.appId,
+          applicationId: app.appApplicationId,
+          title: app.appTitle,
+          description: app.appDescription,
+          status: app.appStatus,
+          activityType: app.appActivityType,
+          facilityName: app.facilityName,
+          facilityCode: app.facilityCode,
+          companyName: app.companyName,
+          companyShortName: app.companyShortName,
+          assignedDate: null, // Will be set from assignments if any exist
+          assignedBy: null,
+          permissions: ['view', 'edit'], // Account owners have automatic view/edit permissions
+          createdAt: app.appCreatedAt,
+          updatedAt: app.appUpdatedAt,
+          assignedToUsers: [],
+          assignedToUser: null // Legacy support
+        });
+      });
+
+      // Then, add current team member assignment details
+      assignments.forEach(assignment => {
+        const app = applicationMap.get(assignment.applicationId);
+        if (app) {
+          const user = {
+            id: assignment.userId,
+            firstName: assignment.assignedUserFirstName,
+            lastName: assignment.assignedUserLastName,
+            email: assignment.assignedUserEmail,
+            permissions: assignment.permissions
+          };
+          
+          app.assignedToUsers.push(user);
+          
+          // Set assignment metadata from first assignment
+          if (!app.assignedDate) {
+            app.assignedDate = assignment.assignedDate;
+            app.assignedBy = assignment.assignedBy;
+          }
+          
+          // Set legacy single user support (first user)
+          if (!app.assignedToUser) {
+            app.assignedToUser = {
+              id: assignment.userId,
+              firstName: assignment.assignedUserFirstName,
+              lastName: assignment.assignedUserLastName,
+              email: assignment.assignedUserEmail,
+            };
+          }
+        }
+      });
+
+      const formattedApplications = Array.from(applicationMap.values());
+
+      console.log(`[STORAGE] Formatted applications:`, formattedApplications);
+      return formattedApplications;
+    } catch (error) {
+      console.error('Error in getContractorApplications:', error);
+      throw error;
+    }
+  }
+
+  async getContractorTeamMembers(companyId: number): Promise<User[]> {
+    const teamMembers = await db
+      .select()
+      .from(users)
+      .where(and(
+        eq(users.companyId, companyId),
+        inArray(users.role, ['contractor_individual', 'contractor_team_member'])
+      ));
+    return teamMembers;
+  }
+
+
+
+  async createContractorInvitation(invitation: any): Promise<any> {
+    // This would typically create a record in an invitations table
+    // For now, we'll return a placeholder
+    return {
+      id: Date.now(),
+      ...invitation,
+      createdAt: new Date()
+    };
+  }
+
+  async assignApplicationToContractor(assignment: any): Promise<any> {
+    // First, create the individual assignment
+    const [created] = await db
+      .insert(applicationAssignments)
+      .values({
+        applicationId: assignment.applicationId,
+        userId: assignment.userId,
+        assignedBy: assignment.assignedBy,
+        permissions: assignment.permissions || ["view"]
+      })
+      .returning();
+
+    // Get the contractor's company ID
+    const user = await db
+      .select({ companyId: users.companyId })
+      .from(users)
+      .where(eq(users.id, assignment.userId))
+      .limit(1);
+
+    if (user.length > 0 && user[0].companyId) {
+      // Create or update the historical tracking record for company-level assignment
+      try {
+        await db.execute(sql`
+          INSERT INTO contractor_company_assignment_history (application_id, contractor_company_id, assigned_by, assigned_at)
+          VALUES (${assignment.applicationId}, ${user[0].companyId}, ${assignment.assignedBy}, ${new Date()})
+          ON CONFLICT (application_id, contractor_company_id) 
+          DO UPDATE SET assigned_by = EXCLUDED.assigned_by, assigned_at = EXCLUDED.assigned_at
+        `);
+        
+        console.log(`[ASSIGNMENT] Created historical tracking for application ${assignment.applicationId} to company ${user[0].companyId}`);
+      } catch (error) {
+        console.error('Error creating historical tracking:', error);
+        // Don't fail the assignment if historical tracking fails
+      }
+    }
+
+    return created;
+  }
+
+  async removeContractorAssignment(applicationId: number, userId: string): Promise<void> {
+    try {
+      console.log(`Removing assignment for application ${applicationId} and user ${userId}`);
+      await db
+        .delete(applicationAssignments)
+        .where(and(
+          eq(applicationAssignments.applicationId, applicationId),
+          eq(applicationAssignments.userId, userId)
+        ));
+      console.log(`Successfully removed assignment for application ${applicationId} and user ${userId}`);
+    } catch (error) {
+      console.error('Error removing contractor assignment:', error);
+      throw error;
+    }
+  }
+
+  async updateContractorAssignmentPermissions(applicationId: number, userId: string, permissions: string[]): Promise<void> {
+    try {
+      console.log(`Updating permissions for application ${applicationId} and user ${userId} to:`, permissions);
+      await db
+        .update(applicationAssignments)
+        .set({ permissions })
+        .where(and(
+          eq(applicationAssignments.applicationId, applicationId),
+          eq(applicationAssignments.userId, userId)
+        ));
+      console.log(`Successfully updated permissions for application ${applicationId} and user ${userId}`);
+    } catch (error) {
+      console.error('Error updating contractor assignment permissions:', error);
+      throw error;
+    }
+  }
+
+  async searchContractors(filters: { activityType?: string; region?: string }): Promise<any[]> {
+    const conditions = [eq(companies.isContractor, true)];
+
+    if (filters.activityType) {
+      conditions.push(sql`${companies.supportedActivities}::text ILIKE ${'%' + filters.activityType + '%'}`);
+    }
+
+    if (filters.region) {
+      conditions.push(sql`${companies.serviceRegions}::text ILIKE ${'%' + filters.region + '%'}`);
+    }
+
+    const contractorCompanies = await db
+      .select()
+      .from(companies)
+      .where(and(...conditions));
+
+    // For each contractor company, get the associated users
+    const contractorsWithUsers = await Promise.all(
+      contractorCompanies.map(async (company) => {
+        const companyUsers = await db
+          .select()
+          .from(users)
+          .where(eq(users.companyId, company.id));
+        
+        return {
+          ...company,
+          users: companyUsers
+        };
+      })
+    );
+
+    return contractorsWithUsers;
+  }
+
+  async getAllContractors(): Promise<Company[]> {
+    return await db
+      .select()
+      .from(companies)
+      .where(eq(companies.isContractor, true))
+      .orderBy(companies.name);
+  }
+
+  // Contractor-specific methods
+  async getContractorCompany(companyId: number) {
+    const [company] = await db
+      .select()
+      .from(companies)
+      .where(and(eq(companies.id, companyId), eq(companies.isContractor, true)));
+    
+    return company;
+  }
+
+
+
+  async getContractorTeamMembers(companyId: number) {
+    const members = await db
+      .select({
+        id: users.id,
+        firstName: users.firstName,
+        lastName: users.lastName,
+        email: users.email,
+        role: users.role,
+        permissionLevel: users.permissionLevel,
+        isActive: users.isActive
+      })
+      .from(users)
+      .where(and(
+        eq(users.companyId, companyId),
+        inArray(users.role, ['contractor_individual', 'contractor_team_member'])
+      ));
+
+    return members;
+  }
+
+  async updateContractorServices(companyId: number, data: { serviceRegions: string[]; supportedActivities: string[]; capitalRetrofitTechnologies?: string[] }) {
+    const updateData: any = {
+      serviceRegions: data.serviceRegions,
+      supportedActivities: data.supportedActivities,
+      updatedAt: new Date()
+    };
+
+    if (data.capitalRetrofitTechnologies !== undefined) {
+      updateData.capitalRetrofitTechnologies = data.capitalRetrofitTechnologies;
+    }
+
+    const [updated] = await db
+      .update(companies)
+      .set(updateData)
+      .where(eq(companies.id, companyId))
+      .returning();
+
+    return updated;
+  }
+
+  async createContractorInvitation(data: {
+    email: string;
+    firstName: string;
+    lastName: string;
+    permissionLevel: string;
+    companyId: number;
+    invitedBy: string;
+  }): Promise<TeamInvitation> {
+    const invitationToken = this.generateSecureToken();
+    const expiresAt = new Date();
+    expiresAt.setDate(expiresAt.getDate() + 7); // 7 days expiry
+
+    const invitationData: InsertTeamInvitation = {
+      email: data.email,
+      firstName: data.firstName,
+      lastName: data.lastName,
+      permissionLevel: data.permissionLevel,
+      companyId: data.companyId,
+      invitedByUserId: data.invitedBy,
+      invitationToken,
+      expiresAt,
+    };
+
+    const [invitation] = await db.insert(teamInvitations).values(invitationData).returning();
+    return invitation;
+  }
+
+  private generateSecureToken(): string {
+    return Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15);
+  }
+
+  async getTeamInvitation(token: string): Promise<TeamInvitation | undefined> {
+    const [invitation] = await db
+      .select()
+      .from(teamInvitations)
+      .where(eq(teamInvitations.invitationToken, token));
+    return invitation;
+  }
+
+  async getTeamInvitationByEmail(email: string, companyId: number): Promise<TeamInvitation | undefined> {
+    const [invitation] = await db
+      .select()
+      .from(teamInvitations)
+      .where(and(
+        eq(teamInvitations.email, email),
+        eq(teamInvitations.companyId, companyId)
+      ));
+    return invitation;
+  }
+
+  async getContractorTeamMembers(companyId: number): Promise<any[]> {
+    const members = await db
+      .select({
+        id: users.id,
+        firstName: users.firstName,
+        lastName: users.lastName,
+        email: users.email,
+        role: users.role,
+        permissionLevel: users.permissionLevel,
+        isActive: users.isActive,
+        company: {
+          id: companies.id,
+          name: companies.name,
+          shortName: companies.shortName
+        }
+      })
+      .from(users)
+      .leftJoin(companies, eq(users.companyId, companies.id))
+      .where(and(
+        eq(users.companyId, companyId),
+        or(
+          eq(users.role, 'contractor_individual'),
+          eq(users.role, 'contractor_team_member'),
+          eq(users.role, 'contractor_account_owner'),
+          eq(users.role, 'contractor_manager')
+        )
+      ));
+
+    return members.map(member => ({
+      id: member.id,
+      firstName: member.firstName || '',
+      lastName: member.lastName || '',
+      email: member.email || '',
+      role: member.role,
+      permissionLevel: member.permissionLevel || 'viewer',
+      isActive: member.isActive || false,
+      company: member.company
+    }));
+  }
+
+  async getContractorTeamInvitations(companyId: number): Promise<any[]> {
+    const invitations = await db
+      .select({
+        id: teamInvitations.id,
+        email: teamInvitations.email,
+        firstName: teamInvitations.firstName,
+        lastName: teamInvitations.lastName,
+        permissionLevel: teamInvitations.permissionLevel,
+        createdAt: teamInvitations.createdAt,
+        status: teamInvitations.status
+      })
+      .from(teamInvitations)
+      .where(eq(teamInvitations.companyId, companyId));
+
+    return invitations.map(inv => ({
+      id: inv.id,
+      email: inv.email,
+      firstName: inv.firstName,
+      lastName: inv.lastName,
+      permissionLevel: inv.permissionLevel,
+      createdAt: inv.createdAt?.toISOString() || '',
+      status: inv.status || 'pending'
+    }));
+  }
+
+  async createContractorTeamInvitation(data: {
+    email: string;
+    firstName: string;
+    lastName: string;
+    permissionLevel: string;
+    companyId: number;
+    invitedBy: string;
+    username: string;
+    password: string;
+  }): Promise<TeamInvitation> {
+    const invitationToken = this.generateSecureToken();
+    const expiresAt = new Date();
+    expiresAt.setDate(expiresAt.getDate() + 7); // 7 days expiry
+
+    const invitationData: InsertTeamInvitation = {
+      email: data.email,
+      firstName: data.firstName,
+      lastName: data.lastName,
+      permissionLevel: data.permissionLevel,
+      companyId: data.companyId,
+      invitedByUserId: data.invitedBy,
+      invitationToken,
+      expiresAt,
+      username: data.username,
+      password: data.password
+    };
+
+    const [invitation] = await db.insert(teamInvitations).values(invitationData).returning();
+    return invitation;
+  }
+
+  async updateTeamInvitation(id: number, data: Partial<InsertTeamInvitation>): Promise<TeamInvitation> {
+    const [updated] = await db
+      .update(teamInvitations)
+      .set(data)
+      .where(eq(teamInvitations.id, id))
+      .returning();
+    return updated;
+  }
+
+  async acceptTeamInvitation(token: string): Promise<void> {
+    await db
+      .update(teamInvitations)
+      .set({ 
+        status: 'accepted',
+        updatedAt: new Date()
+      })
+      .where(eq(teamInvitations.invitationToken, token));
+  }
+
+  // Application assignment methods for contractors
+  async assignApplicationToContractorTeamMember(data: {
+    applicationId: number;
+    userId: string;
+    assignedBy: string;
+    permissions: string[];
+  }): Promise<ApplicationAssignment> {
+    const assignmentData: InsertApplicationAssignment = {
+      applicationId: data.applicationId,
+      userId: data.userId,
+      assignedBy: data.assignedBy,
+      permissions: data.permissions
+    };
+
+    const [assignment] = await db.insert(applicationAssignments).values(assignmentData).returning();
+    return assignment;
+  }
+
+  async removeApplicationAssignmentFromUser(applicationId: number, userId: string): Promise<void> {
+    await db
+      .delete(applicationAssignments)
+      .where(and(
+        eq(applicationAssignments.applicationId, applicationId),
+        eq(applicationAssignments.userId, userId)
+      ));
+  }
+
+  async updateContractorTeamMemberPermissions(userId: string, permissionLevel: string): Promise<void> {
+    await db
+      .update(users)
+      .set({ 
+        permissionLevel: permissionLevel as any,
+        updatedAt: new Date()
+      })
+      .where(eq(users.id, userId));
+  }
+
+  async transferContractorOwnership(currentOwnerId: string, newOwnerId: string): Promise<void> {
+    // Update current owner to manager
+    await db
+      .update(users)
+      .set({ 
+        role: 'contractor_manager',
+        updatedAt: new Date()
+      })
+      .where(eq(users.id, currentOwnerId));
+
+    // Update new owner
+    await db
+      .update(users)
+      .set({ 
+        role: 'contractor_account_owner',
+        permissionLevel: 'owner',
+        updatedAt: new Date()
+      })
+      .where(eq(users.id, newOwnerId));
+  }
+
+  async updateContractorVisibility(companyId: number, isVisible: boolean): Promise<void> {
+    await db
+      .update(companies)
+      .set({ updatedAt: new Date() })
+      .where(eq(companies.id, companyId));
+  }
+
+  async updateCompany(companyId: number, updates: any): Promise<any> {
+    const [updated] = await db
+      .update(companies)
+      .set({ ...updates, updatedAt: new Date() })
+      .where(eq(companies.id, companyId))
+      .returning();
+    return updated;
+  }
+
+  // Approval system methods
+  async getPendingSubmissions(): Promise<any[]> {
+    try {
+      console.log("Getting pending submissions with minimal complexity...");
+      
+      // Simple query first - just get basic submission data
+      const submissions = await db
+        .select({
+          id: applicationSubmissions.id,
+          applicationId: applicationSubmissions.applicationId,
+          formTemplateId: applicationSubmissions.formTemplateId,
+          status: applicationSubmissions.status,
+          approvalStatus: applicationSubmissions.approvalStatus,
+          submittedAt: applicationSubmissions.submittedAt,
+          submittedBy: applicationSubmissions.submittedBy,
+          createdAt: applicationSubmissions.createdAt,
+          data: applicationSubmissions.data
+        })
+        .from(applicationSubmissions)
+        .where(eq(applicationSubmissions.status, 'submitted'))
+        .orderBy(desc(applicationSubmissions.createdAt))
+        .limit(20);
+
+      console.log("Found submissions:", submissions.length);
+
+      // Return basic data first to get system working
+      const enrichedSubmissions = [];
+      for (let i = 0; i < Math.min(submissions.length, 50); i++) {
+        const submission = submissions[i];
+        
+        // Get just essential related data
+        let applicationData = null;
+        let company = null;
+        let facility = null;
+        let template = null;
+        
+        try {
+          // Get application
+          const app = await db.select().from(applications).where(eq(applications.id, submission.applicationId)).limit(1);
+          applicationData = app[0] || null;
+          
+          if (applicationData) {
+            // Get company
+            const comp = await db.select().from(companies).where(eq(companies.id, applicationData.companyId)).limit(1);
+            company = comp[0] || null;
+            
+            // Get facility
+            const fac = await db.select().from(facilities).where(eq(facilities.id, applicationData.facilityId)).limit(1);
+            facility = fac[0] || null;
+          }
+          
+          // Get template
+          if (submission.formTemplateId) {
+            const tmpl = await db.select().from(formTemplates).where(eq(formTemplates.id, submission.formTemplateId)).limit(1);
+            template = tmpl[0] || null;
+          }
+        } catch (err: any) {
+          console.log("Error enriching submission", submission.id, ":", err?.message || err);
+        }
+
+        enrichedSubmissions.push({
+          id: submission.id,
+          applicationId: submission.applicationId,
+          formTemplateId: submission.formTemplateId,
+          status: submission.status,
+          approvalStatus: submission.approvalStatus || 'pending',
+          submittedAt: submission.submittedAt,
+          submittedBy: submission.submittedBy,
+          createdAt: submission.createdAt,
+          data: submission.data,
+          applicationData: applicationData,
+          company: company,
+          facility: facility,
+          template: template,
+          contractorAssignments: [] // Will add later once basic system works
+        });
+      }
+
+      console.log("Returning", enrichedSubmissions.length, "enriched submissions");
+      return enrichedSubmissions;
+    } catch (error) {
+      console.error("Error in getPendingSubmissions:", error);
+      return []; // Return empty array instead of throwing to prevent complete failure
+    }
+  }
+
+  // Get detailed submission information for comprehensive review
+  async getSubmissionDetails(submissionId: number): Promise<any> {
+    try {
+      // Get the submission
+      const [submission] = await db
+        .select()
+        .from(applicationSubmissions)
+        .where(eq(applicationSubmissions.id, submissionId))
+        .limit(1);
+
+      if (!submission) return null;
+
+      // Get application details
+      const [application] = await db
+        .select()
+        .from(applications)
+        .where(eq(applications.id, parseInt(submission.applicationId)))
+        .limit(1);
+
+      if (!application) return null;
+
+      // Get company details
+      const [company] = await db
+        .select()
+        .from(companies)
+        .where(eq(companies.id, application.companyId))
+        .limit(1);
+
+      // Get facility details
+      const [facility] = await db
+        .select()
+        .from(facilities)
+        .where(eq(facilities.id, application.facilityId))
+        .limit(1);
+
+      // Get template details with form fields
+      let template = null;
+      if (submission.formTemplateId) {
+        try {
+          const [formTemplate] = await db
+            .select()
+            .from(formTemplates)
+            .where(eq(formTemplates.id, submission.formTemplateId))
+            .limit(1);
+          template = formTemplate;
+        } catch (err) {
+          const [activityTemplate] = await db
+            .select()
+            .from(activityTemplates)
+            .where(eq(activityTemplates.id, submission.formTemplateId))
+            .limit(1);
+          template = activityTemplate;
+        }
+      }
+
+      // Get submitter details
+      let submitter = null;
+      if (submission.submittedBy) {
+        const [user] = await db
+          .select()
+          .from(users)
+          .where(eq(users.id, submission.submittedBy))
+          .limit(1);
+        submitter = user;
+      }
+
+      // Get all uploaded documents for this application
+      const applicationDocuments = await db
+        .select()
+        .from(documents)
+        .where(eq(documents.applicationId, parseInt(submission.applicationId)))
+        .orderBy(desc(documents.createdAt));
+
+      // Get contractor assignments if any
+      const contractorAssignments = await db
+        .select({
+          userId: applicationAssignments.userId,
+          permissions: applicationAssignments.permissions,
+          assignedAt: applicationAssignments.createdAt,
+          user: {
+            id: users.id,
+            firstName: users.firstName,
+            lastName: users.lastName,
+            email: users.email,
+            role: users.role,
+          }
+        })
+        .from(applicationAssignments)
+        .innerJoin(users, eq(applicationAssignments.userId, users.id))
+        .where(eq(applicationAssignments.applicationId, parseInt(submission.applicationId)));
+
+      // Get all team members for the company
+      const teamMembers = await db
+        .select()
+        .from(users)
+        .where(and(
+          eq(users.companyId, application.companyId),
+          eq(users.isActive, true)
+        ));
+
+      return {
+        ...submission,
+        application,
+        company,
+        facility,
+        template,
+        submitter,
+        documents: applicationDocuments,
+        contractorAssignments,
+        teamMembers
+      };
+    } catch (error) {
+      console.error('Error in getSubmissionDetails:', error);
+      return null;
+    }
+  }
+
+  async approveSubmission(submissionId: number, reviewedBy: string, reviewNotes?: string): Promise<ApplicationSubmission> {
+    const [submission] = await db
+      .update(applicationSubmissions)
+      .set({
+        approvalStatus: 'approved',
+        reviewedBy,
+        reviewedAt: new Date(),
+        reviewNotes,
+        updatedAt: new Date()
+      })
+      .where(eq(applicationSubmissions.id, submissionId))
+      .returning();
+    return submission;
+  }
+
+  async rejectSubmission(submissionId: number, reviewedBy: string, reviewNotes: string): Promise<ApplicationSubmission> {
+    const [submission] = await db
+      .update(applicationSubmissions)
+      .set({
+        approvalStatus: 'rejected',
+        reviewedBy,
+        reviewedAt: new Date(),
+        reviewNotes,
+        updatedAt: new Date()
+      })
+      .where(eq(applicationSubmissions.id, submissionId))
+      .returning();
+    return submission;
+  }
+
+  async getSubmissionDetails(submissionId: number): Promise<any> {
+    try {
+      // Get the submission
+      const [submission] = await db
+        .select()
+        .from(applicationSubmissions)
+        .where(eq(applicationSubmissions.id, submissionId))
+        .limit(1);
+
+      if (!submission) return null;
+
+      // Get application details
+      const [application] = await db
+        .select()
+        .from(applications)
+        .where(eq(applications.id, parseInt(submission.applicationId)))
+        .limit(1);
+
+      if (!application) return null;
+
+      // Get comprehensive company details
+      const [company] = await db
+        .select()
+        .from(companies)
+        .where(eq(companies.id, application.companyId))
+        .limit(1);
+
+      // Get comprehensive facility details with all fields
+      const [facility] = await db
+        .select()
+        .from(facilities)
+        .where(eq(facilities.id, application.facilityId))
+        .limit(1);
+
+      // Get template details with form fields
+      let template = null;
+      if (submission.formTemplateId) {
+        try {
+          const [formTemplate] = await db
+            .select()
+            .from(formTemplates)
+            .where(eq(formTemplates.id, submission.formTemplateId))
+            .limit(1);
+          template = formTemplate;
+        } catch (err) {
+          const [activityTemplate] = await db
+            .select()
+            .from(activityTemplates)
+            .where(eq(activityTemplates.id, submission.formTemplateId))
+            .limit(1);
+          template = activityTemplate;
+        }
+      }
+
+      // Get submitter details
+      let submitter = null;
+      if (submission.submittedBy) {
+        const [user] = await db
+          .select()
+          .from(users)
+          .where(eq(users.id, submission.submittedBy))
+          .limit(1);
+        submitter = user;
+      }
+
+      // Get all uploaded documents for this application
+      const applicationDocuments = await db
+        .select()
+        .from(documents)
+        .where(eq(documents.applicationId, parseInt(submission.applicationId)))
+        .orderBy(desc(documents.createdAt));
+
+      // Get contractor assignments with user details
+      const contractorAssignments = await db
+        .select({
+          userId: applicationAssignments.userId,
+          permissions: applicationAssignments.permissions,
+          assignedAt: applicationAssignments.createdAt,
+          user: {
+            id: users.id,
+            firstName: users.firstName,
+            lastName: users.lastName,
+            email: users.email,
+            role: users.role,
+          }
+        })
+        .from(applicationAssignments)
+        .innerJoin(users, eq(applicationAssignments.userId, users.id))
+        .where(eq(applicationAssignments.applicationId, parseInt(submission.applicationId)));
+
+      // Get all team members for the company
+      const teamMembers = await db
+        .select()
+        .from(users)
+        .where(and(
+          eq(users.companyId, application.companyId),
+          eq(users.isActive, true)
+        ));
+
+      // Get application activity log (who saved what when)
+      const activityLog = await db
+        .select({
+          userId: applications.submittedBy,
+          timestamp: applications.updatedAt,
+          action: sql<string>`'Application Updated'`,
+          user: {
+            firstName: users.firstName,
+            lastName: users.lastName,
+            email: users.email,
+            role: users.role
+          }
+        })
+        .from(applications)
+        .leftJoin(users, eq(applications.submittedBy, users.id))
+        .where(eq(applications.id, parseInt(submission.applicationId)))
+        .orderBy(desc(applications.updatedAt));
+
+      return {
+        ...submission,
+        application,
+        company,
+        facility,
+        template,
+        submitter,
+        documents: applicationDocuments,
+        contractorAssignments,
+        teamMembers,
+        activityLog
+      };
+    } catch (error) {
+      console.error('Error in getSubmissionDetails:', error);
+      return null;
+    }
+  }
+
+  async getApplicationWithFullDetails(applicationId: number): Promise<any> {
+    const [application] = await db
+      .select({
+        id: applications.id,
+        applicationId: applications.applicationId,
+        title: applications.title,
+        description: applications.description,
+        status: applications.status,
+        activityType: applications.activityType,
+        submittedBy: applications.submittedBy,
+        submittedAt: applications.submittedAt,
+        reviewedBy: applications.reviewedBy,
+        reviewedAt: applications.reviewedAt,
+        reviewNotes: applications.reviewNotes,
+        createdAt: applications.createdAt,
+        updatedAt: applications.updatedAt,
+        company: {
+          id: companies.id,
+          name: companies.name,
+          shortName: companies.shortName,
+          businessNumber: companies.businessNumber,
+          website: companies.website,
+          streetAddress: companies.streetAddress,
+          city: companies.city,
+          province: companies.province,
+          country: companies.country,
+          postalCode: companies.postalCode
+        },
+        facility: {
+          id: facilities.id,
+          name: facilities.name,
+          code: facilities.code,
+          naicsCode: facilities.naicsCode,
+          facilitySector: facilities.facilitySector,
+          facilityCategory: facilities.facilityCategory,
+          facilityType: facilities.facilityType,
+          grossFloorArea: facilities.grossFloorArea,
+          yearBuilt: facilities.yearBuilt,
+          weeklyOperatingHours: facilities.weeklyOperatingHours,
+          numberOfWorkersMainShift: facilities.numberOfWorkersMainShift,
+          hasEMIS: facilities.hasEMIS,
+          hasEnergyManager: facilities.hasEnergyManager,
+          streetNumber: facilities.streetNumber,
+          streetName: facilities.streetName,
+          city: facilities.city,
+          province: facilities.province,
+          postalCode: facilities.postalCode
+        }
+      })
+      .from(applications)
+      .leftJoin(companies, eq(applications.companyId, companies.id))
+      .leftJoin(facilities, eq(applications.facilityId, facilities.id))
+      .where(eq(applications.id, applicationId));
+
+    if (!application) return null;
+
+    // Get submissions for this application
+    const submissions = await db
+      .select({
+        id: activityTemplateSubmissions.id,
+        activityTemplateId: activityTemplateSubmissions.activityTemplateId,
+        data: activityTemplateSubmissions.data,
+        status: activityTemplateSubmissions.status,
+        approvalStatus: activityTemplateSubmissions.approvalStatus,
+        submittedAt: activityTemplateSubmissions.submittedAt,
+        submittedBy: activityTemplateSubmissions.submittedBy,
+        reviewedBy: activityTemplateSubmissions.reviewedBy,
+        reviewedAt: activityTemplateSubmissions.reviewedAt,
+        reviewNotes: activityTemplateSubmissions.reviewNotes,
+        template: {
+          id: activityTemplates.id,
+          templateName: activityTemplates.templateName,
+          activityType: activityTemplates.activityType
+        },
+        submitter: {
+          id: users.id,
+          firstName: users.firstName,
+          lastName: users.lastName,
+          email: users.email
+        }
+      })
+      .from(activityTemplateSubmissions)
+      .leftJoin(activityTemplates, eq(activityTemplateSubmissions.activityTemplateId, activityTemplates.id))
+      .leftJoin(users, eq(activityTemplateSubmissions.submittedBy, users.id))
+      .where(eq(activityTemplateSubmissions.applicationId, applicationId))
+      .orderBy(desc(activityTemplateSubmissions.createdAt));
+
+    // Get assigned contractors
+    const contractorAssignments = await db
+      .select({
+        id: applicationAssignments.id,
+        userId: applicationAssignments.userId,
+        permissions: applicationAssignments.permissions,
+        assignedBy: applicationAssignments.assignedBy,
+        createdAt: applicationAssignments.createdAt,
+        user: {
+          id: users.id,
+          firstName: users.firstName,
+          lastName: users.lastName,
+          email: users.email
+        },
+        company: {
+          id: companies.id,
+          name: companies.name,
+          shortName: companies.shortName
+        }
+      })
+      .from(applicationAssignments)
+      .leftJoin(users, eq(applicationAssignments.userId, users.id))
+      .leftJoin(companies, eq(users.companyId, companies.id))
+      .where(eq(applicationAssignments.applicationId, applicationId));
+
+    // Get documents
+    const applicationDocuments = await db
+      .select()
+      .from(documents)
+      .where(eq(documents.applicationId, applicationId))
+      .orderBy(desc(documents.createdAt));
+
+    return {
+      ...application,
+      submissions,
+      contractorAssignments,
+      documents: applicationDocuments
+    };
+  }
+
+  // System Announcements Management
+  async createSystemAnnouncement(announcement: InsertSystemAnnouncement): Promise<SystemAnnouncement> {
+    const [newAnnouncement] = await db
+      .insert(systemAnnouncements)
+      .values(announcement)
+      .returning();
+    return newAnnouncement;
+  }
+
+  async getAllSystemAnnouncements(): Promise<SystemAnnouncement[]> {
+    return await db
+      .select()
+      .from(systemAnnouncements)
+      .orderBy(desc(systemAnnouncements.createdAt));
+  }
+
+  async getActiveSystemAnnouncements(userRole?: string): Promise<SystemAnnouncement[]> {
+    const now = new Date();
+    let query = db
+      .select()
+      .from(systemAnnouncements)
+      .where(
+        and(
+          eq(systemAnnouncements.isActive, true),
+          or(
+            isNull(systemAnnouncements.scheduledStart),
+            lte(systemAnnouncements.scheduledStart, now)
+          ),
+          or(
+            isNull(systemAnnouncements.scheduledEnd),
+            gte(systemAnnouncements.scheduledEnd, now)
+          )
+        )
+      );
+
+    const announcements = await query.orderBy(desc(systemAnnouncements.createdAt));
+
+    // Filter by role if specified
+    if (userRole) {
+      return announcements.filter(announcement => 
+        announcement.targetRoles.includes('all') || 
+        announcement.targetRoles.includes(userRole)
+      );
+    }
+
+    return announcements;
+  }
+
+  async updateSystemAnnouncement(id: number, updates: Partial<InsertSystemAnnouncement>): Promise<SystemAnnouncement> {
+    const [updatedAnnouncement] = await db
+      .update(systemAnnouncements)
+      .set({ ...updates, updatedAt: new Date() })
+      .where(eq(systemAnnouncements.id, id))
+      .returning();
+    return updatedAnnouncement;
+  }
+
+  async deleteSystemAnnouncement(id: number): Promise<void> {
+    await db
+      .delete(systemAnnouncements)
+      .where(eq(systemAnnouncements.id, id));
+  }
+
+  async acknowledgeAnnouncement(announcementId: number, userId: string): Promise<AnnouncementAcknowledgment> {
+    const [acknowledgment] = await db
+      .insert(announcementAcknowledgments)
+      .values({ announcementId, userId })
+      .onConflictDoNothing()
+      .returning();
+    return acknowledgment;
+  }
+
+  async getAnnouncementAcknowledgments(announcementId: number): Promise<AnnouncementAcknowledgment[]> {
+    return await db
+      .select()
+      .from(announcementAcknowledgments)
+      .where(eq(announcementAcknowledgments.announcementId, announcementId))
+      .orderBy(desc(announcementAcknowledgments.acknowledgedAt));
+  }
+
+  async getAnnouncementStats(announcementId: number): Promise<{
+    totalUsers: number;
+    acknowledgedCount: number;
+    acknowledgmentRate: number;
+    userBreakdown: {
+      role: string;
+      total: number;
+      acknowledged: number;
+    }[];
+  }> {
+    // Get announcement details
+    const [announcement] = await db
+      .select()
+      .from(systemAnnouncements)
+      .where(eq(systemAnnouncements.id, announcementId))
+      .limit(1);
+
+    if (!announcement) {
+      throw new Error('Announcement not found');
+    }
+
+    // Get total eligible users based on target roles
+    let totalUsersQuery = db.select().from(users).where(eq(users.isActive, true));
+    
+    if (!announcement.targetRoles.includes('all')) {
+      totalUsersQuery = totalUsersQuery.where(
+        inArray(users.role, announcement.targetRoles)
+      );
+    }
+
+    const totalUsers = await totalUsersQuery;
+    const totalUserCount = totalUsers.length;
+
+    // Get acknowledgments
+    const acknowledgments = await db
+      .select()
+      .from(announcementAcknowledgments)
+      .where(eq(announcementAcknowledgments.announcementId, announcementId));
+
+    const acknowledgedCount = acknowledgments.length;
+    const acknowledgmentRate = totalUserCount > 0 ? (acknowledgedCount / totalUserCount) * 100 : 0;
+
+    // Get user breakdown by role
+    const roleBreakdown = await db
+      .select({
+        role: users.role,
+        total: count(),
+      })
+      .from(users)
+      .where(
+        and(
+          eq(users.isActive, true),
+          announcement.targetRoles.includes('all') 
+            ? undefined 
+            : inArray(users.role, announcement.targetRoles)
+        )
+      )
+      .groupBy(users.role);
+
+    // Get acknowledged count by role
+    const acknowledgedByRole = await db
+      .select({
+        role: users.role,
+        acknowledged: count(),
+      })
+      .from(announcementAcknowledgments)
+      .innerJoin(users, eq(announcementAcknowledgments.userId, users.id))
+      .where(eq(announcementAcknowledgments.announcementId, announcementId))
+      .groupBy(users.role);
+
+    const acknowledgedMap = new Map(acknowledgedByRole.map(item => [item.role, item.acknowledged]));
+
+    const userBreakdown = roleBreakdown.map(item => ({
+      role: item.role,
+      total: item.total,
+      acknowledged: acknowledgedMap.get(item.role) || 0,
+    }));
+
+    return {
+      totalUsers: totalUserCount,
+      acknowledgedCount,
+      acknowledgmentRate: Math.round(acknowledgmentRate * 100) / 100,
+      userBreakdown,
+    };
   }
 }
 

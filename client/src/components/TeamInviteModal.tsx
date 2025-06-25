@@ -22,7 +22,6 @@ export function TeamInviteModal({ isOpen, onClose }: TeamInviteModalProps) {
     email: "",
     firstName: "",
     lastName: "",
-    role: "team_member",
     message: ""
   });
 
@@ -41,7 +40,6 @@ export function TeamInviteModal({ isOpen, onClose }: TeamInviteModalProps) {
         email: "",
         firstName: "",
         lastName: "",
-        role: "team_member",
         message: ""
       });
       onClose();
@@ -70,11 +68,7 @@ export function TeamInviteModal({ isOpen, onClose }: TeamInviteModalProps) {
     inviteMutation.mutate(inviteData);
   };
 
-  const roles = [
-    { value: "team_member", label: "Team Member", description: "Can view and edit assigned applications" },
-    { value: "contractor_individual", label: "Individual Contractor", description: "Contractor with limited access" },
-    { value: "contractor_account_owner", label: "Contractor Account Owner", description: "Full contractor account management" }
-  ];
+
 
   return (
     <Dialog open={isOpen} onOpenChange={onClose}>
@@ -126,24 +120,7 @@ export function TeamInviteModal({ isOpen, onClose }: TeamInviteModalProps) {
             />
           </div>
 
-          <div className="space-y-2">
-            <Label htmlFor="role">Role *</Label>
-            <Select value={inviteData.role} onValueChange={(value) => setInviteData(prev => ({ ...prev, role: value }))}>
-              <SelectTrigger>
-                <SelectValue placeholder="Select role" />
-              </SelectTrigger>
-              <SelectContent>
-                {roles.map((role) => (
-                  <SelectItem key={role.value} value={role.value}>
-                    <div className="flex flex-col">
-                      <span className="font-medium">{role.label}</span>
-                      <span className="text-sm text-gray-500">{role.description}</span>
-                    </div>
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
+
 
           <div className="space-y-2">
             <Label htmlFor="message">Welcome Message (Optional)</Label>
@@ -163,9 +140,9 @@ export function TeamInviteModal({ isOpen, onClose }: TeamInviteModalProps) {
                 <p className="font-medium mb-1">What happens next:</p>
                 <ul className="space-y-1">
                   <li>• An invitation email will be sent to {inviteData.email || "the provided email"}</li>
-                  <li>• They'll receive instructions to create their account</li>
-                  <li>• Once registered, they'll have access based on their assigned role</li>
-                  <li>• You can manage their permissions anytime from the team dashboard</li>
+                  <li>• They'll receive instructions to create their account as a team member</li>
+                  <li>• You can adjust their permission levels after they join</li>
+                  <li>• Manage all team member permissions from the team dashboard</li>
                 </ul>
               </div>
             </div>

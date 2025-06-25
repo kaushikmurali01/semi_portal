@@ -9,7 +9,7 @@ mailService.setApiKey(process.env.SENDGRID_API_KEY);
 
 interface EmailParams {
   to: string;
-  from: string;
+  from?: string;
   subject: string;
   text?: string;
   html?: string;
@@ -19,7 +19,7 @@ export async function sendEmail(params: EmailParams): Promise<boolean> {
   try {
     await mailService.send({
       to: params.to,
-      from: params.from,
+      from: params.from || 'harsanjit.bhullar@enerva.ca',
       subject: params.subject,
       text: params.text,
       html: params.html,
@@ -66,7 +66,21 @@ export async function sendPasswordResetEmail(email: string, resetToken: string):
   });
 }
 
-interface TeamInvitationParams {
+interface SimpleTeamInvitationParams {
+  to: string;
+  html: string;
+}
+
+export async function sendTeamInvitationEmail(params: SimpleTeamInvitationParams): Promise<boolean> {
+  return sendEmail({
+    to: params.to,
+    from: 'harsanjit.bhullar@enerva.ca',
+    subject: 'Team Invitation - SEMI Program',
+    html: params.html,
+  });
+}
+
+interface OriginalTeamInvitationParams {
   to: string;
   invitedBy: string;
   invitedByEmail: string;
@@ -78,7 +92,7 @@ interface TeamInvitationParams {
   customMessage?: string;
 }
 
-export async function sendTeamInvitationEmail(params: TeamInvitationParams): Promise<boolean> {
+export async function sendOriginalTeamInvitationEmail(params: OriginalTeamInvitationParams): Promise<boolean> {
   const {
     to,
     invitedBy,
@@ -177,6 +191,52 @@ export async function sendTeamInvitationEmail(params: TeamInvitationParams): Pro
   });
 }
 
+export async function sendTeamMemberPendingEmail(email: string, firstName: string, companyName: string): Promise<boolean> {
+  return sendEmail({
+    to: email,
+    from: 'harsanjit.bhullar@enerva.ca',
+    subject: 'SEMI Program - Registration Submitted for Approval',
+    html: `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
+        <div style="background-color: #f8f9fa; padding: 30px; border-radius: 10px;">
+          <h1 style="color: #333; margin-bottom: 30px; text-align: center;">Registration Submitted Successfully</h1>
+          
+          <div style="background-color: white; padding: 30px; border-radius: 8px; margin: 20px 0;">
+            <h2 style="color: #2563eb; margin-bottom: 20px;">What happens next?</h2>
+            <p style="font-size: 16px; line-height: 1.6; color: #333; margin-bottom: 20px;">
+              Hi ${firstName},
+            </p>
+            <p style="font-size: 16px; line-height: 1.6; color: #333; margin-bottom: 20px;">
+              Your request to join <strong>${companyName}</strong> has been submitted to the SEMI Program Portal.
+            </p>
+            
+            <div style="background-color: #dbeafe; border: 1px solid #3b82f6; border-radius: 6px; padding: 20px; margin: 25px 0;">
+              <h3 style="color: #1e40af; margin: 0 0 15px 0; font-size: 18px;">Next Steps:</h3>
+              <ol style="color: #1e40af; margin: 0; padding-left: 20px;">
+                <li style="margin-bottom: 10px;">Your registration is now pending approval from the company administrator of ${companyName}</li>
+                <li style="margin-bottom: 10px;">You will receive an email notification once your request has been reviewed</li>
+                <li style="margin-bottom: 10px;">Once approved, you'll be able to log in and access the portal with the permissions assigned to you</li>
+              </ol>
+            </div>
+            
+            <div style="background-color: #f9fafb; border: 1px solid #e5e7eb; border-radius: 6px; padding: 15px; margin: 25px 0;">
+              <p style="margin: 0; color: #6b7280; font-size: 14px;">
+                <strong>Need assistance?</strong> If you have questions about your registration or need to contact your company administrator, please reach out to them directly or contact SEMI Program support.
+              </p>
+            </div>
+          </div>
+          
+          <div style="text-align: center; margin-top: 30px; padding-top: 20px; border-top: 1px solid #e5e7eb;">
+            <p style="color: #6b7280; font-size: 14px; margin: 0;">
+              Thank you for your interest in the SEMI Program!
+            </p>
+          </div>
+        </div>
+      </div>
+    `
+  });
+}
+
 export async function sendEmailVerificationEmail(email: string, firstName: string, verificationCode: string): Promise<boolean> {
   const htmlContent = `
     <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
@@ -225,5 +285,74 @@ export async function sendEmailVerificationEmail(email: string, firstName: strin
     subject: "Your Verification Code - SEMI Program Portal",
     html: htmlContent,
     text: `Welcome to SEMI Program Portal! Your verification code is: ${verificationCode}. This code will expire in 10 minutes. Enter this code on the registration page to complete your account setup.`
+  });
+}
+
+export async function sendContractorTeamInvitation(data: {
+  email: string;
+  firstName: string;
+  lastName: string;
+  companyName: string;
+  inviterName: string;
+  username: string;
+  password: string;
+  permissionLevel: string;
+}): Promise<boolean> {
+  const baseUrl = process.env.FRONTEND_URL || 'http://localhost:5000';
+  const loginUrl = `${baseUrl}/auth`;
+  
+  return sendEmail({
+    to: data.email,
+    from: 'harsanjit.bhullar@enerva.ca',
+    subject: `Team Invitation - ${data.companyName}`,
+    html: `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; background-color: #f8f9fa; padding: 20px;">
+        <div style="background-color: white; padding: 30px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
+          <div style="text-align: center; margin-bottom: 30px;">
+            <h1 style="color: #2563eb; margin: 0; font-size: 28px;">SEMI Program</h1>
+            <p style="color: #6b7280; margin: 5px 0 0 0; font-size: 16px;">Sustainable Energy Management Initiative</p>
+          </div>
+          
+          <h2 style="color: #333; margin-bottom: 20px;">You've Been Invited to Join ${data.companyName}</h2>
+          <p style="font-size: 16px; line-height: 1.6; color: #333; margin-bottom: 20px;">
+            Hello ${data.firstName},
+          </p>
+          <p style="font-size: 16px; line-height: 1.6; color: #333; margin-bottom: 20px;">
+            ${data.inviterName} has invited you to join their contracting team on the SEMI platform.
+          </p>
+          
+          <div style="background-color: #f8f9fa; padding: 20px; border-radius: 8px; margin: 20px 0; border: 1px solid #e9ecef;">
+            <h3 style="color: #333; margin: 0 0 15px 0;">Your Login Credentials</h3>
+            <p style="margin: 5px 0; color: #333;"><strong>Username:</strong> ${data.username}</p>
+            <p style="margin: 5px 0; color: #333;"><strong>Password:</strong> ${data.password}</p>
+            <p style="margin: 5px 0; color: #333;"><strong>Permission Level:</strong> ${data.permissionLevel}</p>
+          </div>
+          
+          <div style="margin: 20px 0;">
+            <h3 style="color: #333; margin: 0 0 15px 0;">Your role includes:</h3>
+            <ul style="color: #333; margin: 0; padding-left: 20px;">
+              ${data.permissionLevel === 'viewer' ? '<li>View applications and company information</li>' : ''}
+              ${data.permissionLevel === 'editor' ? '<li>Edit applications and company information</li><li>View team member details</li>' : ''}
+              ${data.permissionLevel === 'manager' ? '<li>Full access including team management</li><li>Invite new team members</li><li>Manage permissions</li>' : ''}
+            </ul>
+          </div>
+          
+          <div style="background-color: #fff3cd; border: 1px solid #ffeaa7; border-radius: 6px; padding: 15px; margin: 20px 0;">
+            <p style="margin: 0; color: #856404;"><strong>Important:</strong> Please change your password after your first login for security.</p>
+          </div>
+          
+          <div style="text-align: center; margin: 30px 0;">
+            <a href="${loginUrl}" style="background-color: #2563eb; color: white; padding: 12px 24px; text-decoration: none; border-radius: 6px; display: inline-block; font-weight: 500;">Login to SEMI Platform</a>
+          </div>
+          
+          <div style="text-align: center; margin-top: 30px; padding-top: 20px; border-top: 1px solid #e5e7eb;">
+            <p style="color: #6b7280; font-size: 14px; margin: 0;">
+              If you have any questions, please contact ${data.inviterName} or our support team.<br>
+              Welcome to the SEMI Program!
+            </p>
+          </div>
+        </div>
+      </div>
+    `
   });
 }

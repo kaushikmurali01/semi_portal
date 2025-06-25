@@ -362,3 +362,5 @@ export function DocumentUpload({ onClose, applicationId }: DocumentUploadProps) 
     </Dialog>
   );
 }
+
+export default DocumentUpload;

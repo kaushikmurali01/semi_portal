@@ -10,6 +10,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { 
   Plus, 
   Trash2, 
@@ -50,7 +51,7 @@ interface FormTemplate {
   name: string;
   description: string;
   activityType: string;
-  phase: 'pre_activity' | 'post_activity';
+  order: number;
   fields: FormField[];
   form_fields?: FormField[]; // For compatibility with database structure
   isActive: boolean;
@@ -68,7 +69,7 @@ const FIELD_TYPES = [
   { type: 'select', label: 'Dropdown', icon: List },
 ];
 
-const ACTIVITY_TYPES = ['FRA', 'SEM', 'EEA', 'EMIS', 'CR'];
+const ACTIVITY_TYPES = ['FRA', 'SEM', 'EAA', 'EMIS', 'CR'];
 
 export default function AdminFormBuilder() {
   const { user } = useAuth();
@@ -84,6 +85,8 @@ export default function AdminFormBuilder() {
     queryKey: ['/api/admin/form-templates'],
     enabled: user?.role === 'system_admin',
   });
+
+
 
   // Create/Update template mutation
   const saveTemplateMutation = useMutation({
@@ -111,17 +114,50 @@ export default function AdminFormBuilder() {
     },
   });
 
+  // Delete template mutation
+  const deleteTemplateMutation = useMutation({
+    mutationFn: async (templateId: number) => {
+      const response = await fetch(`/api/admin/form-templates/${templateId}`, {
+        method: 'DELETE',
+      });
+      
+      if (!response.ok) throw new Error('Failed to delete template');
+      
+      // Handle both JSON responses and empty 204 responses
+      try {
+        return await response.json();
+      } catch {
+        return { success: true };
+      }
+    },
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ['/api/admin/form-templates'] });
+      if (data?.preservedData) {
+        toast({ 
+          title: "Template Deactivated", 
+          description: "Template deactivated to preserve historical application data",
+        });
+      } else {
+        toast({ title: "Template Deleted", description: "Form template deleted successfully" });
+      }
+    },
+    onError: () => {
+      toast({ title: "Delete Failed", description: "Could not delete form template", variant: "destructive" });
+    },
+  });
+
   const createNewTemplate = () => {
     const newTemplate: FormTemplate = {
       name: '',
       description: '',
       activityType: 'FRA',
-      phase: 'pre_activity',
+      order: 1,
       fields: [],
       isActive: true,
     };
     setSelectedTemplate(newTemplate);
     setIsEditing(true);
+    setActiveTab("builder");
   };
 
   const addField = (type: string) => {
@@ -212,6 +248,13 @@ export default function AdminFormBuilder() {
     saveTemplateMutation.mutate(templateData);
   };
 
+  const [deleteConfirmTemplate, setDeleteConfirmTemplate] = useState<number | null>(null);
+
+  const confirmDeleteTemplate = (templateId: number) => {
+    deleteTemplateMutation.mutate(templateId);
+    setDeleteConfirmTemplate(null);
+  };
+
   if (user?.role !== 'system_admin') {
     return (
       <div className="p-6">
@@ -262,7 +305,7 @@ export default function AdminFormBuilder() {
                 <CardContent>
                   <p className="text-sm text-gray-600 mb-3">{template.description}</p>
                   <div className="text-xs text-gray-500 mb-3">
-                    {template.fields?.length || 0} fields
+                    {template.fields?.length || template.form_fields?.length || template.fieldCount || 0} fields
                   </div>
                   <div className="flex space-x-2">
                     <Button
@@ -285,6 +328,14 @@ export default function AdminFormBuilder() {
                       }}
                     >
                       <Eye className="h-4 w-4" />
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      onClick={() => setDeleteConfirmTemplate(template.id)}
+                      className="text-red-600 hover:text-red-700 hover:bg-red-50"
+                    >
+                      <Trash2 className="h-4 w-4" />
                     </Button>
                   </div>
                 </CardContent>
@@ -454,22 +505,21 @@ export default function AdminFormBuilder() {
                     </div>
                     
                     <div>
-                      <Label htmlFor="phase">Phase</Label>
-                      <Select
-                        value={selectedTemplate.phase}
-                        onValueChange={(value: 'pre_activity' | 'post_activity') => setSelectedTemplate({
+                      <Label htmlFor="order">Order</Label>
+                      <Input
+                        id="order"
+                        type="number"
+                        min="1"
+                        value={selectedTemplate.order || ''}
+                        onChange={(e) => setSelectedTemplate({
                           ...selectedTemplate,
-                          phase: value
+                          order: parseInt(e.target.value) || 1
                         })}
-                      >
-                        <SelectTrigger>
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="pre_activity">Pre-Activity</SelectItem>
-                          <SelectItem value="post_activity">Post-Activity</SelectItem>
-                        </SelectContent>
-                      </Select>
+                        placeholder="Template order (1, 2, 3...)"
+                      />
+                      <p className="text-xs text-gray-500 mt-1">
+                        Order determines the sequence within the activity type
+                      </p>
                     </div>
                   </CardContent>
                 </Card>
@@ -488,6 +538,28 @@ export default function AdminFormBuilder() {
           {selectedTemplate && <FormPreview template={selectedTemplate} />}
         </DialogContent>
       </Dialog>
+
+      {/* Delete Confirmation Dialog */}
+      <AlertDialog open={deleteConfirmTemplate !== null} onOpenChange={() => setDeleteConfirmTemplate(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete Template</AlertDialogTitle>
+            <AlertDialogDescription>
+              Are you sure you want to delete this template? If applications have used this template, 
+              it will be deactivated instead of deleted to preserve historical data.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction 
+              onClick={() => deleteConfirmTemplate && confirmDeleteTemplate(deleteConfirmTemplate)}
+              className="bg-red-600 hover:bg-red-700"
+            >
+              Delete
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }
@@ -690,7 +762,7 @@ function FormPreview({ template }: { template: FormTemplate }) {
         <p className="text-gray-600">{template.description}</p>
         <div className="flex space-x-2 mt-2">
           <Badge>{template.activityType}</Badge>
-          <Badge variant="outline">{template.phase.replace('_', ' ')}</Badge>
+          <Badge variant="outline">Order: {template.order}</Badge>
         </div>
       </div>
 

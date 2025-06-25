@@ -12,14 +12,25 @@ import {
   FileSpreadsheet, 
   File, 
   Globe, 
-  Building 
+  Building,
+  Search,
+  Filter,
+  X,
+  CalendarDays,
+  ArrowUpDown
 } from "lucide-react";
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest } from "@/lib/queryClient";
+import { Input } from "@/components/ui/input";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
 export default function Documents() {
   const [showDocumentUpload, setShowDocumentUpload] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [fileTypeFilter, setFileTypeFilter] = useState("all");
+  const [documentTypeFilter, setDocumentTypeFilter] = useState("all");
+  const [sortBy, setSortBy] = useState("date_desc");
   const { toast } = useToast();
 
   const { data: templates = [] } = useQuery({
@@ -33,6 +44,79 @@ export default function Documents() {
   const { data: applications = [] } = useQuery({
     queryKey: ['/api/applications'],
   });
+
+  // Filter and sort documents
+  const filteredAndSortedDocuments = useMemo(() => {
+    if (!Array.isArray(documents)) return [];
+    
+    let filtered = documents.filter((doc: any) => {
+      // Search by filename (if no search query, include all)
+      const matchesSearch = !searchQuery || doc.originalName?.toLowerCase().includes(searchQuery.toLowerCase());
+      
+      // Filter by file type (based on mime type)
+      const matchesFileType = fileTypeFilter === "all" || 
+        (fileTypeFilter === "pdf" && doc.mimeType?.includes("pdf")) ||
+        (fileTypeFilter === "excel" && (doc.mimeType?.includes("spreadsheet") || doc.mimeType?.includes("excel"))) ||
+        (fileTypeFilter === "word" && (doc.mimeType?.includes("document") || doc.mimeType?.includes("word"))) ||
+        (fileTypeFilter === "other" && !doc.mimeType?.includes("pdf") && !doc.mimeType?.includes("spreadsheet") && !doc.mimeType?.includes("excel") && !doc.mimeType?.includes("document") && !doc.mimeType?.includes("word"));
+      
+      // Filter by document type
+      const matchesDocumentType = documentTypeFilter === "all" || doc.documentType === documentTypeFilter;
+      
+      return matchesSearch && matchesFileType && matchesDocumentType;
+    });
+
+    // Sort documents
+    filtered.sort((a: any, b: any) => {
+      switch (sortBy) {
+        case "date_desc":
+          return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+        case "date_asc":
+          return new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime();
+        case "name_asc":
+          return a.originalName?.localeCompare(b.originalName) || 0;
+        case "name_desc":
+          return b.originalName?.localeCompare(a.originalName) || 0;
+        case "size_desc":
+          return (b.size || 0) - (a.size || 0);
+        case "size_asc":
+          return (a.size || 0) - (b.size || 0);
+        default:
+          return 0;
+      }
+    });
+
+    return filtered;
+  }, [documents, searchQuery, fileTypeFilter, documentTypeFilter, sortBy]);
+
+  // Get unique file types and document types for filter options
+  const fileTypes = useMemo(() => {
+    if (!Array.isArray(documents)) return [];
+    const types = new Set();
+    documents.forEach((doc: any) => {
+      if (doc.mimeType?.includes("pdf")) types.add("pdf");
+      else if (doc.mimeType?.includes("spreadsheet") || doc.mimeType?.includes("excel")) types.add("excel");
+      else if (doc.mimeType?.includes("document") || doc.mimeType?.includes("word")) types.add("word");
+      else types.add("other");
+    });
+    return Array.from(types);
+  }, [documents]);
+
+  const documentTypes = useMemo(() => {
+    if (!Array.isArray(documents)) return [];
+    const types = new Set(documents.map((doc: any) => doc.documentType).filter(Boolean));
+    return Array.from(types);
+  }, [documents]);
+
+  // Clear all filters
+  const clearFilters = () => {
+    setSearchQuery("");
+    setFileTypeFilter("all");
+    setDocumentTypeFilter("all");
+    setSortBy("date_desc");
+  };
+
+  const hasActiveFilters = searchQuery || fileTypeFilter !== "all" || documentTypeFilter !== "all" || sortBy !== "date_desc";
 
   const handleDownload = async (documentId: number, filename: string) => {
     try {
@@ -148,7 +232,80 @@ export default function Documents() {
         <div className="lg:col-span-3">
           <Card>
             <CardHeader>
-              <CardTitle>Document Repository</CardTitle>
+              <div className="flex items-center justify-between">
+                <CardTitle>Document Repository ({filteredAndSortedDocuments.length} of {documents.length || 0})</CardTitle>
+                {hasActiveFilters && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={clearFilters}
+                    className="text-gray-500 hover:text-gray-700"
+                  >
+                    <X className="h-4 w-4 mr-1" />
+                    Clear Filters
+                  </Button>
+                )}
+              </div>
+              
+              {/* Search and Filter Controls */}
+              <div className="mt-6 pt-4 border-t border-gray-100">
+                <div className="flex flex-col lg:flex-row gap-4">
+                  {/* Search Bar */}
+                  <div className="relative flex-1">
+                    <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
+                    <Input
+                      placeholder="Search documents by filename..."
+                      value={searchQuery}
+                      onChange={(e) => setSearchQuery(e.target.value)}
+                      className="pl-10"
+                    />
+                  </div>
+
+                  {/* File Type Filter */}
+                  <Select value={fileTypeFilter} onValueChange={setFileTypeFilter}>
+                    <SelectTrigger className="w-full lg:w-[150px]">
+                      <SelectValue placeholder="File Type" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">All Types</SelectItem>
+                      <SelectItem value="pdf">PDF</SelectItem>
+                      <SelectItem value="excel">Excel</SelectItem>
+                      <SelectItem value="word">Word</SelectItem>
+                      <SelectItem value="other">Other</SelectItem>
+                    </SelectContent>
+                  </Select>
+
+                  {/* Document Type Filter */}
+                  <Select value={documentTypeFilter} onValueChange={setDocumentTypeFilter}>
+                    <SelectTrigger className="w-full lg:w-[150px]">
+                      <SelectValue placeholder="Doc Type" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">All Categories</SelectItem>
+                      {documentTypes.map((type: any) => (
+                        <SelectItem key={type} value={type}>
+                          {type.replace('_', ' ').toUpperCase()}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+
+                  {/* Sort By */}
+                  <Select value={sortBy} onValueChange={setSortBy}>
+                    <SelectTrigger className="w-full lg:w-[150px]">
+                      <SelectValue placeholder="Sort By" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="date_desc">Newest First</SelectItem>
+                      <SelectItem value="date_asc">Oldest First</SelectItem>
+                      <SelectItem value="name_asc">Name A-Z</SelectItem>
+                      <SelectItem value="name_desc">Name Z-A</SelectItem>
+                      <SelectItem value="size_desc">Largest First</SelectItem>
+                      <SelectItem value="size_asc">Smallest First</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
             </CardHeader>
             <CardContent>
               <Tabs defaultValue="all">
@@ -157,9 +314,14 @@ export default function Documents() {
                 </TabsList>
 
                 <TabsContent value="all" className="mt-6">
-                  {documents.length > 0 ? (
+                  {documentsLoading ? (
+                    <div className="text-center py-12">
+                      <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary mx-auto mb-4"></div>
+                      <p className="text-gray-500">Loading documents...</p>
+                    </div>
+                  ) : filteredAndSortedDocuments.length > 0 ? (
                     <div className="space-y-4">
-                      {documents.map((document: any) => (
+                      {filteredAndSortedDocuments.map((document: any) => (
                         <div key={document.id} className="flex items-center justify-between p-4 border rounded-lg hover:bg-gray-50">
                           <div className="flex items-center space-x-3">
                             {getFileIcon(document.mimeType)}

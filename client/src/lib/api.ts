@@ -38,12 +38,12 @@ export interface UploadDocumentData {
 // Company API
 export const companyApi = {
   create: async (data: CreateCompanyData) => {
-    const response = await apiRequest('POST', '/api/companies', data);
+    const response = await apiRequest('/api/companies', 'POST', data);
     return response.json();
   },
 
   getCurrent: async () => {
-    const response = await apiRequest('GET', '/api/companies/current');
+    const response = await apiRequest('/api/companies/current', 'GET');
     return response.json();
   }
 };
@@ -51,12 +51,12 @@ export const companyApi = {
 // Facility API
 export const facilityApi = {
   create: async (data: CreateFacilityData) => {
-    const response = await apiRequest('POST', '/api/facilities', data);
+    const response = await apiRequest('/api/facilities', 'POST', data);
     return response.json();
   },
 
   getAll: async () => {
-    const response = await apiRequest('GET', '/api/facilities');
+    const response = await apiRequest('/api/facilities', 'GET');
     return response.json();
   }
 };
@@ -64,22 +64,22 @@ export const facilityApi = {
 // Application API
 export const applicationApi = {
   create: async (data: CreateApplicationData) => {
-    const response = await apiRequest('POST', '/api/applications', data);
+    const response = await apiRequest('/api/applications', 'POST', data);
     return response.json();
   },
 
   getAll: async () => {
-    const response = await apiRequest('GET', '/api/applications');
+    const response = await apiRequest('/api/applications', 'GET');
     return response.json();
   },
 
   update: async (id: number, data: UpdateApplicationData) => {
-    const response = await apiRequest('PATCH', `/api/applications/${id}`, data);
+    const response = await apiRequest(`/api/applications/${id}`, 'PATCH', data);
     return response.json();
   },
 
   submit: async (id: number) => {
-    const response = await apiRequest('PATCH', `/api/applications/${id}`, {
+    const response = await apiRequest(`/api/applications/${id}`, 'PATCH', {
       status: 'submitted',
       submittedAt: new Date().toISOString()
     });
@@ -115,12 +115,12 @@ export const documentApi = {
   },
 
   getByApplication: async (applicationId: number) => {
-    const response = await apiRequest('GET', `/api/documents/application/${applicationId}`);
+    const response = await apiRequest(`/api/documents/application/${applicationId}`, 'GET');
     return response.json();
   },
 
   getTemplates: async () => {
-    const response = await apiRequest('GET', '/api/documents/templates');
+    const response = await apiRequest('/api/documents/templates', 'GET');
     return response.json();
   },
 
@@ -137,19 +137,19 @@ export const documentApi = {
   },
 
   delete: async (id: number) => {
-    await apiRequest('DELETE', `/api/documents/${id}`);
+    await apiRequest(`/api/documents/${id}`, 'DELETE');
   }
 };
 
 // Team API
 export const teamApi = {
   getMembers: async () => {
-    const response = await apiRequest('GET', '/api/team');
+    const response = await apiRequest('/api/team', 'GET');
     return response.json();
   },
 
   updateRole: async (userId: string, role: string) => {
-    const response = await apiRequest('PATCH', `/api/users/${userId}/role`, { role });
+    const response = await apiRequest(`/api/users/${userId}/role`, 'PATCH', { role });
     return response.json();
   }
 };
@@ -157,7 +157,7 @@ export const teamApi = {
 // Dashboard API
 export const dashboardApi = {
   getStats: async () => {
-    const response = await apiRequest('GET', '/api/dashboard/stats');
+    const response = await apiRequest('/api/dashboard/stats', 'GET');
     return response.json();
   }
 };
@@ -165,12 +165,12 @@ export const dashboardApi = {
 // Activity Settings API
 export const activityApi = {
   getSettings: async () => {
-    const response = await apiRequest('GET', '/api/activity-settings');
+    const response = await apiRequest('/api/activity-settings', 'GET');
     return response.json();
   },
 
   updateSettings: async (activityType: string, updates: any) => {
-    const response = await apiRequest('PATCH', `/api/activity-settings/${activityType}`, updates);
+    const response = await apiRequest(`/api/activity-settings/${activityType}`, 'PATCH', updates);
     return response.json();
   }
 };
@@ -178,17 +178,17 @@ export const activityApi = {
 // Admin API
 export const adminApi = {
   getAllUsers: async () => {
-    const response = await apiRequest('GET', '/api/admin/users');
+    const response = await apiRequest('/api/admin/users', 'GET');
     return response.json();
   },
 
   getAllApplications: async () => {
-    const response = await apiRequest('GET', '/api/admin/applications');
+    const response = await apiRequest('/api/admin/applications', 'GET');
     return response.json();
   },
 
   getApplicationStats: async () => {
-    const response = await apiRequest('GET', '/api/admin/stats');
+    const response = await apiRequest('/api/admin/stats', 'GET');
     return response.json();
   }
 };

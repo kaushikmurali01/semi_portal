@@ -10,10 +10,11 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Badge } from "@/components/ui/badge";
-import { ChevronDown, User, LogOut, Shield } from "lucide-react";
+import { ChevronDown, User, LogOut, Shield, MapPin, Phone, Globe, Building, UserCheck } from "lucide-react";
 import { USER_ROLES } from "@/lib/constants";
 import { useQuery } from "@tanstack/react-query";
 import { NotificationBell } from "./NotificationBell";
+import strategicEnergyLogo from "@/assets/strategic-energy.svg";
 
 export default function Header() {
   const { user } = useAuth();
@@ -23,6 +24,8 @@ export default function Header() {
     queryKey: ['/api/companies/current'],
     enabled: !!user,
   });
+
+
 
 
 
@@ -54,25 +57,76 @@ export default function Header() {
   return (
     <header className="bg-white shadow-sm border-b border-gray-200 px-6 py-4 sticky top-0 z-50">
       <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-xl font-semibold text-gray-900">
-            Welcome back, {user?.firstName} {user?.lastName}
-          </h1>
-          {company?.name && (
-            <p className="text-sm text-gray-500 mt-1">
-              {company.name}
-            </p>
-          )}
-          {user?.role && (
-            <div className="mt-1">
-              <Badge 
-                variant="outline" 
-                className={`border-${getUserRoleInfo(user.role).color}-200 text-${getUserRoleInfo(user.role).color}-800`}
-              >
-                {getUserRoleInfo(user.role).label}
-              </Badge>
+        <div className="flex items-center space-x-6">
+          <div className="flex items-center space-x-4">
+            <Building className="h-8 w-8 text-gray-600" />
+            <div>
+              {company?.name && (
+                <h1 className="text-xl font-semibold text-gray-900">
+                  {company.name}
+                </h1>
+              )}
+              <div className="flex items-center space-x-4 text-sm text-gray-600 mt-1">
+                {/* Address */}
+                {(company?.address || company?.streetAddress || company?.city) && (
+                  <div className="flex items-center space-x-1">
+                    <MapPin className="h-4 w-4" />
+                    <span>
+                      {company.address || [company.streetAddress, company.city, company.province].filter(Boolean).join(', ')}
+                    </span>
+                  </div>
+                )}
+                
+                {/* Phone */}
+                {company?.phone && (
+                  <div className="flex items-center space-x-1">
+                    <Phone className="h-4 w-4" />
+                    <span>{company.phone}</span>
+                  </div>
+                )}
+                
+                {/* Website */}
+                {company?.website && (
+                  <div className="flex items-center space-x-1">
+                    <Globe className="h-4 w-4" />
+                    <a 
+                      href={company.website.startsWith('http') ? company.website : `https://${company.website}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-blue-600 hover:text-blue-800 hover:underline"
+                    >
+                      {company.website.replace(/^https?:\/\//, '')}
+                    </a>
+                  </div>
+                )}
+                
+                {/* Account Owner and Current User Role */}
+                {user && (
+                  <div className="flex items-center space-x-1">
+                    <UserCheck className="h-4 w-4" />
+                    <span>
+                      Account Owner: {user.firstName} {user.lastName} 
+                      {user.role && (
+                        <Badge 
+                          variant="outline" 
+                          className={`ml-2 border-${getUserRoleInfo(user.role).color}-200 text-${getUserRoleInfo(user.role).color}-800 text-xs`}
+                        >
+                          {getUserRoleInfo(user.role).label}
+                        </Badge>
+                      )}
+                    </span>
+                  </div>
+                )}
+              </div>
+              
+              {/* Business Number */}
+              {company?.businessNumber && (
+                <p className="text-xs text-gray-500 mt-1">
+                  Business Number: {company.businessNumber}
+                </p>
+              )}
             </div>
-          )}
+          </div>
         </div>
         
         <div className="flex items-center space-x-4">
@@ -102,6 +156,16 @@ export default function Header() {
                 <div>
                   <p className="font-medium">{user?.firstName} {user?.lastName}</p>
                   <p className="text-xs text-gray-500">{user?.email}</p>
+                  {user?.role && (
+                    <div className="mt-2">
+                      <Badge 
+                        variant="outline" 
+                        className={`border-${getUserRoleInfo(user.role).color}-200 text-${getUserRoleInfo(user.role).color}-800 text-xs`}
+                      >
+                        {getUserRoleInfo(user.role).label}
+                      </Badge>
+                    </div>
+                  )}
                 </div>
               </DropdownMenuLabel>
               <DropdownMenuSeparator />

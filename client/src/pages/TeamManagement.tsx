@@ -47,13 +47,13 @@ export default function TeamManagement() {
   const [showTransferAdminDialog, setShowTransferAdminDialog] = useState(false);
   const [showDeactivateDialog, setShowDeactivateDialog] = useState(false);
 
-  const { data: teamMembers = [] } = useQuery({
+  const { data: teamMembers = [], isLoading: isLoadingTeam } = useQuery({
     queryKey: ['/api/team'],
   });
 
   const inviteUserMutation = useMutation({
     mutationFn: async (userData: any) => {
-      const res = await apiRequest("POST", "/api/team/invite", userData);
+      const res = await apiRequest("/api/team/invite", "POST", userData);
       return res.json();
     },
     onSuccess: (data) => {
@@ -77,7 +77,7 @@ export default function TeamManagement() {
 
   const transferAdminMutation = useMutation({
     mutationFn: async ({ newAdminId }: { newAdminId: string }) => {
-      return await apiRequest('PATCH', `/api/team/transfer-admin`, { newAdminId });
+      return await apiRequest(`/api/team/transfer-admin`, 'PATCH', { newAdminId });
     },
     onSuccess: () => {
       toast({
@@ -100,7 +100,7 @@ export default function TeamManagement() {
 
   const updatePermissionLevelMutation = useMutation({
     mutationFn: async ({ userId, permissionLevel }: { userId: string; permissionLevel: string }) => {
-      return await apiRequest('PATCH', `/api/users/${userId}/permission-level`, { permissionLevel });
+      return await apiRequest(`/api/users/${userId}/permission-level`, 'PATCH', { permissionLevel });
     },
     onSuccess: () => {
       toast({
@@ -122,7 +122,7 @@ export default function TeamManagement() {
 
   const deactivateUserMutation = useMutation({
     mutationFn: async ({ userId }: { userId: string }) => {
-      return await apiRequest('PATCH', `/api/users/${userId}/deactivate`, {});
+      return await apiRequest(`/api/users/${userId}/deactivate`, 'PATCH', {});
     },
     onSuccess: () => {
       toast({
@@ -146,14 +146,12 @@ export default function TeamManagement() {
     e.preventDefault();
     const formData = new FormData(e.currentTarget);
     const email = formData.get('email') as string;
-    const role = formData.get('role') as string;
     const firstName = formData.get('firstName') as string;
     const lastName = formData.get('lastName') as string;
     const message = formData.get('message') as string;
 
     inviteUserMutation.mutate({
       email,
-      role,
       firstName,
       lastName,
       message
@@ -201,6 +199,15 @@ export default function TeamManagement() {
   const canInviteTeamMembers = user ? hasPermission(user.role, PERMISSIONS.INVITE_TEAM_MEMBERS) : false;
   const canManageTeam = user ? hasPermission(user.role, PERMISSIONS.MANAGE_TEAM_MEMBERS) : false;
 
+  // Debug logging for team management permissions
+  console.log('TeamManagement Debug:', {
+    user: user ? { id: user.id, role: user.role, email: user.email } : null,
+    canInviteTeamMembers,
+    canManageTeam,
+    teamMembersCount: teamMembers.length,
+    teamMembers: teamMembers.map((m: any) => ({ id: m.id, role: m.role, isActive: m.isActive, email: m.email }))
+  });
+
   return (
     <div className="p-6">
       {/* Header */}
@@ -241,20 +248,7 @@ export default function TeamManagement() {
                   <Label htmlFor="email">Email Address</Label>
                   <Input id="email" name="email" type="email" required />
                 </div>
-                <div>
-                  <Label htmlFor="role">Role</Label>
-                  <Select name="role" defaultValue="team_member">
-                    <SelectTrigger>
-                      <SelectValue placeholder="Select a role" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="team_member">Team Member</SelectItem>
-                      {(user?.role === 'company_admin' || user?.role === 'system_admin') && (
-                        <SelectItem value="company_admin">Company Admin</SelectItem>
-                      )}
-                    </SelectContent>
-                  </Select>
-                </div>
+
                 <div>
                   <Label htmlFor="message">Personal Message (Optional)</Label>
                   <Textarea 
@@ -285,7 +279,11 @@ export default function TeamManagement() {
             <div className="flex items-center justify-between">
               <div>
                 <p className="text-sm font-medium text-gray-600">Total Team Members</p>
-                <p className="text-3xl font-bold text-gray-900">{teamMembers.length}</p>
+                {isLoadingTeam ? (
+                  <div className="h-9 w-8 bg-gray-200 animate-pulse rounded"></div>
+                ) : (
+                  <p className="text-3xl font-bold text-gray-900">{teamMembers.length}</p>
+                )}
               </div>
               <div className="w-12 h-12 bg-blue-100 rounded-lg flex items-center justify-center">
                 <User className="h-6 w-6 text-blue-600" />
@@ -299,9 +297,13 @@ export default function TeamManagement() {
             <div className="flex items-center justify-between">
               <div>
                 <p className="text-sm font-medium text-gray-600">Admins</p>
-                <p className="text-3xl font-bold text-gray-900">
-                  {teamMembers.filter((member: any) => member.role === 'company_admin').length}
-                </p>
+                {isLoadingTeam ? (
+                  <div className="h-9 w-8 bg-gray-200 animate-pulse rounded"></div>
+                ) : (
+                  <p className="text-3xl font-bold text-gray-900">
+                    {teamMembers.filter((member: any) => member.role === 'company_admin').length}
+                  </p>
+                )}
               </div>
               <div className="w-12 h-12 bg-purple-100 rounded-lg flex items-center justify-center">
                 <Shield className="h-6 w-6 text-purple-600" />
@@ -315,9 +317,13 @@ export default function TeamManagement() {
             <div className="flex items-center justify-between">
               <div>
                 <p className="text-sm font-medium text-gray-600">Active Members</p>
-                <p className="text-3xl font-bold text-gray-900">
-                  {teamMembers.filter((member: any) => member.isActive).length}
-                </p>
+                {isLoadingTeam ? (
+                  <div className="h-9 w-8 bg-gray-200 animate-pulse rounded"></div>
+                ) : (
+                  <p className="text-3xl font-bold text-gray-900">
+                    {teamMembers.filter((member: any) => member.isActive).length}
+                  </p>
+                )}
               </div>
               <div className="w-12 h-12 bg-green-100 rounded-lg flex items-center justify-center">
                 <User className="h-6 w-6 text-green-600" />
@@ -333,7 +339,34 @@ export default function TeamManagement() {
           <CardTitle>Team Members</CardTitle>
         </CardHeader>
         <CardContent>
-          {teamMembers.length > 0 ? (
+          {isLoadingTeam ? (
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+              {[1, 2, 3].map((i) => (
+                <div key={i} className="border border-gray-200 rounded-lg p-4 animate-pulse">
+                  <div className="flex items-start justify-between mb-4">
+                    <div className="flex items-center space-x-3">
+                      <div className="h-12 w-12 bg-gray-200 rounded-full"></div>
+                      <div>
+                        <div className="h-4 w-24 bg-gray-200 rounded mb-2"></div>
+                        <div className="h-3 w-32 bg-gray-200 rounded"></div>
+                      </div>
+                    </div>
+                  </div>
+                  <div className="flex items-center justify-between mb-2">
+                    <div className="h-6 w-20 bg-gray-200 rounded"></div>
+                    <div className="h-6 w-16 bg-gray-200 rounded"></div>
+                  </div>
+                  <div className="flex items-center justify-between mb-2">
+                    <div className="h-6 w-24 bg-gray-200 rounded"></div>
+                    <div className="h-6 w-12 bg-gray-200 rounded"></div>
+                  </div>
+                  <div className="mt-4 pt-4 border-t border-gray-200">
+                    <div className="h-8 w-full bg-gray-200 rounded"></div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : teamMembers.length > 0 ? (
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
               {teamMembers.map((member: any) => (
                 <div key={member.id} className="border border-gray-200 rounded-lg p-4">
@@ -405,6 +438,7 @@ export default function TeamManagement() {
                           {member.role === 'team_member' && canEditPermissions(user) && (
                             <DropdownMenuItem
                               onClick={() => {
+                                console.log('Change Permissions clicked for member:', member);
                                 setSelectedMember(member);
                                 setShowPermissionLevelDialog(true);
                               }}
@@ -416,6 +450,7 @@ export default function TeamManagement() {
                           {user?.role === 'company_admin' && member.role !== 'company_admin' && (
                             <DropdownMenuItem
                               onClick={() => {
+                                console.log('Transfer Admin clicked for member:', member);
                                 setSelectedMember(member);
                                 setShowTransferAdminDialog(true);
                               }}
@@ -424,9 +459,10 @@ export default function TeamManagement() {
                               Make Company Admin
                             </DropdownMenuItem>
                           )}
-                          {member.isActive && (
+                          {member.isActive !== false && (
                             <DropdownMenuItem
                               onClick={() => {
+                                console.log('Deactivate clicked for member:', member);
                                 setSelectedMember(member);
                                 setShowDeactivateDialog(true);
                               }}

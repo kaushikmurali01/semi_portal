@@ -74,7 +74,7 @@ export default function ThreadedMessages() {
     enabled: !!user && user.role !== 'system_admin',
   });
 
-  // Fetch messages with forced refresh
+  // Fetch messages with optimized refresh strategy
   const {
     data: messages = [],
     isLoading,
@@ -82,24 +82,10 @@ export default function ThreadedMessages() {
     refetch,
   } = useQuery({
     queryKey: ["/api/messages"],
-    queryFn: async () => {
-      const response = await fetch('/api/messages', {
-        credentials: 'include',
-        cache: 'no-store',
-        headers: {
-          'Cache-Control': 'no-cache, no-store, must-revalidate',
-          'Pragma': 'no-cache'
-        }
-      });
-      if (!response.ok) throw new Error('Failed to fetch messages');
-      return response.json();
-    },
     enabled: !!user,
-    refetchInterval: 1000, // Refresh every 1 second for real-time updates
-    staleTime: 0,
-    gcTime: 0,
+    staleTime: 30000, // 30 seconds - reasonable freshness without excessive calls
+    refetchOnWindowFocus: false, // Don't refetch on focus to reduce calls
     refetchOnMount: true,
-    refetchOnWindowFocus: true,
     refetchOnReconnect: true,
   });
 
@@ -158,15 +144,13 @@ export default function ThreadedMessages() {
         applicationId: messageData.applicationId && messageData.applicationId !== "none" ? parseInt(messageData.applicationId) : null,
       });
     },
-    onSuccess: async () => {
-      // Force immediate cache invalidation and refetch
-      queryClient.removeQueries({ queryKey: ["/api/messages"] });
-      await queryClient.invalidateQueries({ queryKey: ["/api/messages"] });
-      await refetch();
+    onSuccess: (data: any) => {
+      // Clear form immediately and show ticket number
       setNewMessage({ subject: "", message: "", applicationId: "" });
+      queryClient.invalidateQueries({ queryKey: ["/api/messages"] });
       toast({
-        title: "Message sent",
-        description: "Your message has been sent successfully.",
+        title: "Message sent successfully",
+        description: `Ticket #${data.ticketNumber || 'N/A'} created. Reference this number when contacting support.`,
       });
     },
     onError: (error: Error) => {
@@ -180,60 +164,18 @@ export default function ThreadedMessages() {
 
   // Reply to message mutation
   const replyMessageMutation = useMutation({
-    mutationFn: async (replyData: { subject: string; message: string; toUserId?: string; applicationId?: number }) => {
+    mutationFn: async (replyData: { subject: string; message: string; toUserId?: string; applicationId?: number; ticketNumber?: string }) => {
       return await apiRequest("POST", "/api/messages", replyData);
     },
-    onMutate: async (replyData) => {
-      // Optimistically add the message to the UI
-      if (selectedThread && user) {
-        const optimisticMessage = {
-          id: Date.now(), // Temporary ID
-          fromUserId: user.id,
-          toUserId: replyData.toUserId || null,
-          subject: replyData.subject,
-          message: replyData.message,
-          isRead: false,
-          isAdminMessage: user.role === 'system_admin',
-          applicationId: replyData.applicationId || null,
-          createdAt: new Date().toISOString(),
-          fromUser: {
-            id: user.id,
-            email: user.email,
-            firstName: user.firstName,
-            lastName: user.lastName,
-            companyId: null,
-          },
-        };
-
-        // Add message to the current thread
-        const updatedThread = {
-          ...selectedThread,
-          messages: [...selectedThread.messages, optimisticMessage],
-          lastActivity: new Date().toISOString(),
-        };
-        setSelectedThread(updatedThread);
-      }
-    },
-    onSuccess: async () => {
-      // Force immediate cache invalidation and refetch to get real data
-      queryClient.removeQueries({ queryKey: ["/api/messages"] });
-      await queryClient.invalidateQueries({ queryKey: ["/api/messages"] });
-      await refetch();
+    onSuccess: () => {
       setReplyText("");
+      queryClient.invalidateQueries({ queryKey: ["/api/messages"] });
       toast({
         title: "Reply sent",
         description: "Your reply has been sent successfully.",
       });
     },
     onError: (error: Error) => {
-      // Revert optimistic update on error
-      if (selectedThread) {
-        const revertedThread = {
-          ...selectedThread,
-          messages: selectedThread.messages.filter(m => m.id !== Date.now()),
-        };
-        setSelectedThread(revertedThread);
-      }
       toast({
         title: "Failed to send reply",
         description: error.message,
@@ -281,12 +223,15 @@ export default function ThreadedMessages() {
     
     // Find the original user ID (first non-admin user in the thread)
     const originalUserId = selectedThread.messages.find(m => !m.isAdminMessage)?.fromUserId;
+    // Get ticket number from the thread
+    const ticketNumber = (selectedThread.messages[0] as any)?.ticketNumber;
     
     replyMessageMutation.mutate({
       subject: `Re: ${selectedThread.subject}`,
       message: replyText,
       toUserId: originalUserId,
       applicationId: selectedThread.messages[0]?.applicationId || undefined,
+      ticketNumber: ticketNumber,
     });
   };
 
@@ -399,9 +344,16 @@ export default function ThreadedMessages() {
               <div className="border-b pb-4">
                 <div className="flex items-start justify-between">
                   <div>
-                    <h3 className="text-lg font-medium">{selectedThread.subject}</h3>
+                    <div className="flex items-center gap-3 mb-2">
+                      <h3 className="text-lg font-medium">{selectedThread.subject}</h3>
+                      {(selectedThread.messages[0] as any)?.ticketNumber && (
+                        <Badge variant="outline" className="text-xs font-mono">
+                          Ticket #{(selectedThread.messages[0] as any).ticketNumber}
+                        </Badge>
+                      )}
+                    </div>
                     {user?.role === 'system_admin' && selectedThread.company && (
-                      <div className="flex items-center gap-2 text-sm text-muted-foreground mt-1">
+                      <div className="flex items-center gap-2 text-sm text-muted-foreground">
                         <Building2 className="h-4 w-4" />
                         <span className="font-medium">{selectedThread.company.name}</span>
                         <span>({selectedThread.company.shortName})</span>
@@ -572,7 +524,7 @@ export default function ThreadedMessages() {
                     </SelectTrigger>
                     <SelectContent>
                       <SelectItem value="none">No application selected</SelectItem>
-                      {userApplications.map((app: any) => (
+                      {(userApplications as any[])?.map((app: any) => (
                         <SelectItem key={app.id} value={app.id.toString()}>
                           {app.applicationId} - {app.title}
                         </SelectItem>

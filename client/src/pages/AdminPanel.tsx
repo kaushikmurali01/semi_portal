@@ -1,10 +1,11 @@
+import React from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Switch } from "@/components/ui/switch";
-import { ApplicationTable } from "@/components/ApplicationTable";
+
 import { 
   Users, 
   Building, 
@@ -13,14 +14,19 @@ import {
   Shield, 
   BarChart3,
   Download,
-  AlertTriangle
+  AlertTriangle,
+  Layout
 } from "lucide-react";
 import { useAuth } from "@/hooks/useAuth";
 import { USER_ROLES } from "@/lib/constants";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 
-export default function AdminPanel() {
+interface AdminPanelProps {
+  defaultTab?: string;
+}
+
+export default function AdminPanel({ defaultTab }: AdminPanelProps) {
   const { user } = useAuth();
   const { toast } = useToast();
 
@@ -29,15 +35,16 @@ export default function AdminPanel() {
     enabled: user?.role === 'system_admin',
   });
 
-  const { data: allApplications = [] } = useQuery({
-    queryKey: ['/api/admin/applications'],
-    enabled: user?.role === 'system_admin',
-  });
 
-  const { data: activitySettings = [] } = useQuery({
-    queryKey: ['/api/activity-settings'],
-    enabled: user?.role === 'system_admin',
-  });
+
+  // Hardcoded activity settings to ensure they display in correct order
+  const activitySettings = [
+    { activityType: 'FRA', isEnabled: true, maxApplications: 1, description: 'Activity 1 - Facility Readiness Assessment (FRA)' },
+    { activityType: 'EAA', isEnabled: true, maxApplications: 2, description: 'Activity 2 - Energy Assessments and Audits (EAA)' },
+    { activityType: 'SEM', isEnabled: true, maxApplications: 1, description: 'Activity 3 - Strategic Energy Manager (SEM)' },
+    { activityType: 'EMIS', isEnabled: true, maxApplications: null, description: 'Activity 4 - Energy Management Information Systems (EMIS)' },
+    { activityType: 'CR', isEnabled: true, maxApplications: 3, description: 'Activity 5 - Capital Retrofits (CR)' }
+  ];
 
   const updateActivitySettingMutation = useMutation({
     mutationFn: async ({ activityType, isEnabled }: { activityType: string; isEnabled: boolean }) => {
@@ -58,6 +65,30 @@ export default function AdminPanel() {
       toast({
         title: "Failed to update setting",
         description: "Could not update the activity setting. Please try again.",
+        variant: "destructive",
+      });
+    },
+  });
+
+  const updateActivityLimitMutation = useMutation({
+    mutationFn: async ({ activityType, maxApplications }: { activityType: string; maxApplications: number | null }) => {
+      const res = await apiRequest("PATCH", `/api/admin/activity-settings/${activityType}`, {
+        maxApplications,
+        updatedBy: user?.id
+      });
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['/api/activity-settings'] });
+      toast({
+        title: "Application limit updated",
+        description: "The application limit has been successfully updated.",
+      });
+    },
+    onError: () => {
+      toast({
+        title: "Failed to update limit",
+        description: "Could not update the application limit. Please try again.",
         variant: "destructive",
       });
     },
@@ -177,11 +208,34 @@ export default function AdminPanel() {
         </Card>
       </div>
 
+      {/* Navigation Links */}
+      <div className="mb-6">
+        <div className="flex items-center gap-4">
+          <Button
+            variant="outline"
+            onClick={() => window.location.href = '/admin/applications'}
+            className="flex items-center gap-2"
+          >
+            <FileText className="h-4 w-4" />
+            Manage Applications
+          </Button>
+          <Button
+            variant="outline"
+            onClick={() => window.location.href = '/admin/approvals'}
+            className="flex items-center gap-2"
+          >
+            <Shield className="h-4 w-4" />
+            Review Approvals
+          </Button>
+        </div>
+      </div>
+
       {/* Admin Tabs */}
-      <Tabs defaultValue="users" className="space-y-6">
+      <Tabs defaultValue={defaultTab || "users"} className="space-y-6">
         <TabsList>
           <TabsTrigger value="users">User Management</TabsTrigger>
-          <TabsTrigger value="applications">Application Oversight</TabsTrigger>
+          <TabsTrigger value="templates">Activity Templates</TabsTrigger>
+          <TabsTrigger value="limits">Application Limits</TabsTrigger>
           <TabsTrigger value="settings">System Settings</TabsTrigger>
           <TabsTrigger value="reports">Reports</TabsTrigger>
         </TabsList>
@@ -247,24 +301,146 @@ export default function AdminPanel() {
           </Card>
         </TabsContent>
 
-        <TabsContent value="applications">
+
+
+        <TabsContent value="templates">
           <Card>
             <CardHeader>
               <div className="flex items-center justify-between">
                 <div>
-                  <CardTitle>Application Oversight</CardTitle>
+                  <CardTitle>Activity Templates</CardTitle>
                   <CardDescription>
-                    Review and manage applications from all companies.
+                    Manage flexible activity templates that determine which phases appear in applications. Activities only show if templates exist for them.
                   </CardDescription>
                 </div>
-                <Button>
-                  <Download className="h-4 w-4 mr-2" />
-                  Export Applications
-                </Button>
+                <div className="w-12 h-12 bg-orange-100 rounded-lg flex items-center justify-center">
+                  <Layout className="h-6 w-6 text-orange-600" />
+                </div>
               </div>
             </CardHeader>
             <CardContent>
-              <ApplicationTable applications={allApplications} />
+              <div className="space-y-6">
+                <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
+                  <div className="flex items-start space-x-3">
+                    <AlertTriangle className="h-5 w-5 text-blue-600 mt-0.5" />
+                    <div>
+                      <h4 className="text-sm font-medium text-blue-900">Template-Driven System</h4>
+                      <div className="text-sm text-blue-700 mt-1 space-y-1">
+                        <p>• Activities only appear if templates exist for them</p>
+                        <p>• Templates define custom phase names and ordering</p>
+                        <p>• Dependencies control unlock sequence between phases</p>
+                        <p>• System replaces fixed pre/post activity structure</p>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+                
+                <div className="text-center py-8">
+                  <Layout className="h-12 w-12 text-gray-300 mx-auto mb-4" />
+                  <h3 className="text-lg font-medium text-gray-900 mb-2">Activity Template Management</h3>
+                  <p className="text-gray-600 mb-4">
+                    Create and manage flexible activity templates that define which phases appear in applications.
+                  </p>
+                  <Button onClick={() => window.location.href = '/admin/activity-templates'}>
+                    <Layout className="h-4 w-4 mr-2" />
+                    Manage Activity Templates
+                  </Button>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        <TabsContent value="limits">
+          <Card>
+            <CardHeader>
+              <CardTitle>Application Limits</CardTitle>
+              <CardDescription>
+                Configure maximum application limits per activity type for each facility.
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className="space-y-4">
+                {activitySettings.map((setting: any) => (
+                  <div key={setting.activityType} className="flex items-center justify-between p-4 border border-gray-200 rounded-lg">
+                    <div className="flex-1">
+                      <div className="flex items-center space-x-3">
+                        <h3 className="font-medium text-gray-900">{setting.activityType}</h3>
+                        <Badge variant={setting.isEnabled ? "default" : "secondary"}>
+                          {setting.isEnabled ? 'Enabled' : 'Disabled'}
+                        </Badge>
+                      </div>
+                      <p className="text-sm text-gray-500 mt-1">
+                        {setting.description || `Configure application limits for ${setting.activityType} activity`}
+                      </p>
+                      <div className="mt-2">
+                        <span className="text-xs text-gray-600">
+                          Current limit: {setting.maxApplications ? `${setting.maxApplications} per facility` : 'Unlimited'}
+                        </span>
+                      </div>
+                    </div>
+                    <div className="flex items-center space-x-4">
+                      <div className="flex items-center space-x-2">
+                        <label className="text-sm font-medium text-gray-700">Max Applications:</label>
+                        <input
+                          type="number"
+                          min="1"
+                          max="999"
+                          placeholder={setting.activityType === 'FRA' ? '1' : 'No limit'}
+                          defaultValue={setting.maxApplications || ''}
+                          disabled={!setting.isEnabled || updateActivityLimitMutation.isPending}
+                          className="w-20 px-2 py-1 text-sm border border-gray-300 rounded focus:ring-2 focus:ring-blue-500 focus:border-blue-500 disabled:bg-gray-100 disabled:cursor-not-allowed"
+                          onBlur={(e) => {
+                            const value = e.target.value;
+                            const maxApplications = value ? parseInt(value) : null;
+                            
+                            // Only update if the value changed
+                            if (maxApplications !== setting.maxApplications) {
+                              updateActivityLimitMutation.mutate({
+                                activityType: setting.activityType,
+                                maxApplications
+                              });
+                            }
+                          }}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') {
+                              e.currentTarget.blur();
+                            }
+                          }}
+                        />
+                      </div>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        disabled={!setting.isEnabled || updateActivityLimitMutation.isPending}
+                        onClick={() => {
+                          updateActivityLimitMutation.mutate({
+                            activityType: setting.activityType,
+                            maxApplications: null
+                          });
+                        }}
+                      >
+                        Remove Limit
+                      </Button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+              
+              <div className="mt-6 p-4 bg-blue-50 border border-blue-200 rounded-lg">
+                <div className="flex items-start space-x-3">
+                  <AlertTriangle className="h-5 w-5 text-blue-600 mt-0.5" />
+                  <div>
+                    <h4 className="text-sm font-medium text-blue-900">Application Limit Guidelines</h4>
+                    <div className="text-sm text-blue-700 mt-1 space-y-1">
+                      <p>• FRA activities are limited to 1 application per facility by default</p>
+                      <p>• Other activities have no limit unless specified</p>
+                      <p>• Limits apply per facility, not per company</p>
+                      <p>• Changes take effect immediately for new applications</p>
+                    </div>
+                  </div>
+                </div>
+              </div>
             </CardContent>
           </Card>
         </TabsContent>
@@ -315,6 +491,79 @@ export default function AdminPanel() {
               </CardContent>
             </Card>
 
+            {/* Application Limits Configuration */}
+            <Card>
+              <CardHeader>
+                <CardTitle>Application Limits</CardTitle>
+                <CardDescription>
+                  Configure maximum application limits per activity type for each facility.
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <div className="space-y-4">
+                  {activitySettings.map((setting: any) => (
+                    <div key={setting.activityType} className="flex items-center justify-between p-4 border border-gray-200 rounded-lg">
+                      <div className="flex-1">
+                        <div className="flex items-center space-x-3">
+                          <h3 className="font-medium text-gray-900">{setting.activityType}</h3>
+                          <Badge variant={setting.isEnabled ? "default" : "secondary"}>
+                            {setting.isEnabled ? 'Enabled' : 'Disabled'}
+                          </Badge>
+                        </div>
+                        <p className="text-sm text-gray-500 mt-1">
+                          {setting.description || `Configure application limits for ${setting.activityType} activity`}
+                        </p>
+                        <div className="mt-2">
+                          <span className="text-xs text-gray-600">
+                            Current limit: {setting.maxApplications ? `${setting.maxApplications} per facility` : 'Unlimited'}
+                          </span>
+                        </div>
+                      </div>
+                      <div className="flex items-center space-x-4">
+                        <div className="flex items-center space-x-2">
+                          <input
+                            type="number"
+                            min="1"
+                            max="99"
+                            value={setting.maxApplications || ''}
+                            onChange={(e) => {
+                              const newLimit = e.target.value ? parseInt(e.target.value) : null;
+                              updateActivityLimitMutation.mutate({
+                                activityType: setting.activityType,
+                                maxApplications: newLimit
+                              });
+                            }}
+                            className="w-20 px-2 py-1 text-sm border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-blue-500"
+                            placeholder="∞"
+                          />
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => {
+                              updateActivityLimitMutation.mutate({
+                                activityType: setting.activityType,
+                                maxApplications: null
+                              });
+                            }}
+                            disabled={updateActivityLimitMutation.isPending}
+                          >
+                            Remove Limit
+                          </Button>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                  <div className="mt-4 p-3 bg-blue-50 rounded-lg">
+                    <p className="text-sm text-blue-800 font-medium">Important Notes:</p>
+                    <div className="text-xs text-blue-700 mt-1 space-y-1">
+                      <p>• Limits apply per facility, not per company</p>
+                      <p>• Changes take effect immediately for new applications</p>
+                    </div>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+
             {/* System Configuration */}
             <Card>
               <CardHeader>
@@ -353,7 +602,82 @@ export default function AdminPanel() {
         </TabsContent>
 
         <TabsContent value="reports">
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          <div className="grid grid-cols-1 gap-6">
+            {/* Application Limits Configuration */}
+            <Card>
+              <CardHeader>
+                <CardTitle>Application Limits</CardTitle>
+                <CardDescription>
+                  Configure maximum application limits per activity type for each facility.
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <div className="space-y-4">
+                  {activitySettings.map((setting: any) => (
+                    <div key={setting.activityType} className="flex items-center justify-between p-4 border border-gray-200 rounded-lg">
+                      <div className="flex-1">
+                        <div className="flex items-center space-x-3">
+                          <h3 className="font-medium text-gray-900">{setting.activityType}</h3>
+                          <Badge variant={setting.isEnabled ? "default" : "secondary"}>
+                            {setting.isEnabled ? 'Enabled' : 'Disabled'}
+                          </Badge>
+                        </div>
+                        <p className="text-sm text-gray-500 mt-1">
+                          {setting.description || `Configure application limits for ${setting.activityType} activity`}
+                        </p>
+                        <div className="mt-2">
+                          <span className="text-xs text-gray-600">
+                            Current limit: {setting.maxApplications ? `${setting.maxApplications} per facility` : 'Unlimited'}
+                          </span>
+                        </div>
+                      </div>
+                      <div className="flex items-center space-x-4">
+                        <div className="flex items-center space-x-2">
+                          <input
+                            type="number"
+                            min="1"
+                            max="99"
+                            value={setting.maxApplications || ''}
+                            onChange={(e) => {
+                              const newLimit = e.target.value ? parseInt(e.target.value) : null;
+                              updateActivityLimitMutation.mutate({
+                                activityType: setting.activityType,
+                                maxApplications: newLimit
+                              });
+                            }}
+                            className="w-20 px-2 py-1 text-sm border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-blue-500"
+                            placeholder="∞"
+                          />
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => {
+                              updateActivityLimitMutation.mutate({
+                                activityType: setting.activityType,
+                                maxApplications: null
+                              });
+                            }}
+                            disabled={updateActivityLimitMutation.isPending}
+                          >
+                            Remove Limit
+                          </Button>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                  <div className="mt-4 p-3 bg-blue-50 rounded-lg">
+                    <p className="text-sm text-blue-800 font-medium">Important Notes:</p>
+                    <div className="text-xs text-blue-700 mt-1 space-y-1">
+                      <p>• Limits apply per facility, not per company</p>
+                      <p>• Changes take effect immediately for new applications</p>
+                    </div>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+          </div>
+
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mt-6">
             {/* Usage Statistics */}
             <Card>
               <CardHeader>

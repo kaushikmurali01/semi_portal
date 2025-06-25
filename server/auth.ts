@@ -10,17 +10,29 @@ import { sendEmailVerificationEmail } from "./sendgrid";
 
 const scryptAsync = promisify(scrypt);
 
-async function hashPassword(password: string) {
-  const salt = randomBytes(16).toString("hex");
-  const buf = (await scryptAsync(password, salt, 64)) as Buffer;
-  return `${buf.toString("hex")}.${salt}`;
+export async function hashPassword(password: string) {
+  const bcrypt = await import('bcrypt');
+  return bcrypt.hash(password, 10);
 }
 
 async function comparePasswords(supplied: string, stored: string) {
-  const [hashed, salt] = stored.split(".");
-  const hashedBuf = Buffer.from(hashed, "hex");
-  const suppliedBuf = (await scryptAsync(supplied, salt, 64)) as Buffer;
-  return timingSafeEqual(hashedBuf, suppliedBuf);
+  try {
+    // Check if it's a bcrypt hash (starts with $2b$)
+    if (stored.startsWith('$2b$')) {
+      const bcrypt = await import('bcrypt');
+      return await bcrypt.default.compare(supplied, stored);
+    }
+    
+    // Legacy format for existing passwords
+    const [hashed, salt] = stored.split(".");
+    if (!salt) return false;
+    const hashedBuf = Buffer.from(hashed, "hex");
+    const suppliedBuf = (await scryptAsync(supplied, salt, 64)) as Buffer;
+    return timingSafeEqual(hashedBuf, suppliedBuf);
+  } catch (error) {
+    console.error('Password comparison error:', error);
+    return false;
+  }
 }
 
 export function setupAuth(app: Express) {
@@ -41,7 +53,16 @@ export function setupAuth(app: Express) {
   // Register endpoint
   app.post("/api/auth/register", async (req: Request, res: Response) => {
     try {
-      const { email, password, firstName, lastName, userType, companyName, companyShortName } = req.body;
+      const { 
+        email, password, firstName, lastName, businessMobile, userType, role, companyName, companyShortName,
+        businessNumber, companyWebsite, streetAddress, city, province, country, postalCode,
+        howHeardAbout, howHeardAboutOther, agreeToPortalServices, agreeToBusinessInfo, agreeToContact,
+        phone, website, serviceRegions, supportedActivities, capitalRetrofitTechnologies,
+        hasCodeOfConductAgreement, hasPrivacyPolicyAgreement, hasTermsOfServiceAgreement, hasDataSharingAgreement,
+        acceptTerms, acceptBusinessInfo, acceptContact, codeOfConductAgreed, gstWcbInsuranceConfirmed
+      } = req.body;
+
+
 
       // Validate password requirements
       const passwordRegex = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[!@#$%^&*(),.?":{}|<>]).{8,64}$/;
@@ -66,37 +87,322 @@ export function setupAuth(app: Express) {
 
       // Create user with unique ID
       const userId = nanoid();
+      // Detect company owner registration by presence of company fields
+      const isCompanyOwner = !!(companyName && companyShortName && businessNumber);
+      // Detect team member registration by userType field (frontend maps role to userType)
+      const isTeamMember = userType === "team_member";
+
+      const userRole = role || userType; // Handle both role and userType fields
+      
+      console.log("[REGISTRATION DEBUG] Registration type detection:", {
+        userType,
+        role,
+        userRole,
+        companyName,
+        companyShortName,
+        businessNumber,
+        isCompanyOwner,
+        isTeamMember
+      });
+
+      
+      const assignedRole = isCompanyOwner ? "company_admin" as const : 
+                          isTeamMember ? "team_member" as const :
+                          (userRole === "contractor_individual" || userType === "contractor") ? "contractor_individual" as const : "team_member" as const;
+
       const userData = {
         id: userId,
         email,
         password: hashedPassword,
         firstName,
         lastName,
+        businessMobile: businessMobile || null,
         emailVerificationToken,
         verificationTokenExpiry,
         isEmailVerified: false,
-        role: userType === "company_owner" ? "company_admin" as const : 
-              userType === "contractor" ? "contractor_individual" as const : "team_member" as const
+        role: assignedRole
       };
 
       let user = await storage.upsertUser(userData);
 
-      // If company owner, create company
-      if (userType === "company_owner" && companyName && companyShortName) {
-        const company = await storage.createCompany({
-          name: companyName,
-          shortName: companyShortName
+      // Check if email was already verified in session (from popup verification)
+      const emailVerified = (req.session as any)?.emailVerified;
+      if (emailVerified === email) {
+        // Update user to mark as verified since they completed verification in popup
+        user = await storage.updateUser(user.id, {
+          isEmailVerified: true,
+          emailVerifiedAt: new Date()
         });
 
-        // Update user with company association
-        user = await storage.upsertUser({
-          ...userData,
-          companyId: company.id,
-          role: "company_admin" as const
+      }
+
+      // Handle team member registration
+      if (isTeamMember) {
+        console.log("[TEAM MEMBER REGISTRATION] Processing team member registration for:", email);
+        // Validate required fields for team members
+        if (!companyName) {
+          return res.status(400).json({ 
+            message: "Company name is required for team member registration" 
+          });
+        }
+
+        // Find the company by name
+        const existingCompany = await storage.getCompanyByName(companyName);
+        if (!existingCompany) {
+          return res.status(400).json({ 
+            message: "Company not found. Please verify the exact company name or contact your company administrator." 
+          });
+        }
+
+        // Update user with company association and mark as verified (team members don't need email verification)
+        user = await storage.updateUser(user.id, {
+          companyId: existingCompany.id,
+          role: "team_member" as const,
+          isEmailVerified: true,
+          emailVerifiedAt: new Date()
+        });
+
+        // Send notification email to team member about pending approval
+        // Note: This is different from email verification - it's a notification about what to expect
+        try {
+          const { sendTeamMemberPendingEmail } = await import('./sendgrid');
+          await sendTeamMemberPendingEmail(email, firstName, existingCompany.name);
+        } catch (error) {
+          console.error("Failed to send team member notification email:", error);
+          // Don't fail the registration if email fails
+        }
+        
+        return res.status(201).json({
+          message: "Registration submitted successfully! Your request is pending approval from your company administrator. You will receive an email confirmation once approved.",
+          user: {
+            id: user.id,
+            email: user.email,
+            firstName: user.firstName,
+            lastName: user.lastName,
+            role: user.role,
+            companyId: user.companyId
+          },
+          requiresEmailVerification: false,
+          isPending: true
         });
       }
 
-      // Send verification email
+      // Handle contractor registration
+      if (userRole === "contractor_individual") {
+        console.log("[CONTRACTOR REGISTRATION] Processing contractor registration for:", email);
+        console.log("[CONTRACTOR REGISTRATION] Request body fields:", {
+          companyName, streetAddress, city, province, country, postalCode,
+          serviceRegions, supportedActivities, hasCodeOfConductAgreement,
+          hasPrivacyPolicyAgreement, hasTermsOfServiceAgreement, hasDataSharingAgreement,
+          acceptTerms, acceptBusinessInfo, acceptContact, codeOfConductAgreed, gstWcbInsuranceConfirmed
+        });
+        console.log("[CONTRACTOR REGISTRATION] Full request body:", req.body);
+        
+        // Validate required contractor fields (postalCode is optional for contractors)
+        console.log("[CONTRACTOR REGISTRATION] Field validation debug:", {
+          companyName: { value: companyName, valid: !!companyName },
+          streetAddress: { value: streetAddress, valid: !!streetAddress },
+          city: { value: city, valid: !!city },
+          province: { value: province, valid: !!province },
+          country: { value: country, valid: !!country },
+          postalCode: { value: postalCode, valid: !!postalCode }
+        });
+        
+        if (!companyName || !streetAddress || !city || !province || !country) {
+          console.log("[CONTRACTOR REGISTRATION] Validation failed - one or more required fields missing");
+          return res.status(400).json({ 
+            message: "All business information fields are required for contractor registration" 
+          });
+        }
+
+        // Validate contractor agreements - check both possible field name formats
+        const codeOfConductAccepted = hasCodeOfConductAgreement || codeOfConductAgreed;
+        const termsAccepted = hasTermsOfServiceAgreement || acceptTerms || agreeToPortalServices;
+        const businessInfoAccepted = hasPrivacyPolicyAgreement || acceptBusinessInfo || agreeToBusinessInfo;
+        const contactAccepted = hasDataSharingAgreement || acceptContact || agreeToContact;
+        
+        if (!codeOfConductAccepted || !termsAccepted || !businessInfoAccepted || !contactAccepted) {
+          console.log("[CONTRACTOR REGISTRATION] Agreement validation failed:", {
+            codeOfConductAccepted, termsAccepted, businessInfoAccepted, contactAccepted,
+            receivedFields: { hasCodeOfConductAgreement, codeOfConductAgreed, acceptTerms, acceptBusinessInfo, acceptContact }
+          });
+          return res.status(400).json({ 
+            message: "You must agree to all terms and conditions to register as a contractor" 
+          });
+        }
+
+        // Generate unique short name for contractor company
+        const baseShortName = companyName.substring(0, 6).toUpperCase().replace(/[^A-Z0-9]/g, '');
+        let contractorShortName = baseShortName;
+        let counter = 1;
+        
+        // Check for conflicts and generate unique name
+        while (counter <= 100) {
+          const existingCompany = await storage.getCompanyByShortName(contractorShortName);
+          if (!existingCompany) {
+            break; // Found unique name
+          }
+          
+          counter++;
+          // Generate new name with counter
+          if (counter <= 9) {
+            contractorShortName = `${baseShortName.substring(0, 5)}${counter}`;
+          } else {
+            contractorShortName = `${baseShortName.substring(0, 4)}${counter}`;
+          }
+        }
+        
+        if (counter > 100) {
+          return res.status(400).json({ 
+            message: "Unable to generate unique company identifier. Please contact support." 
+          });
+        }
+        
+        console.log(`[CONTRACTOR REGISTRATION] Generated unique short name: ${contractorShortName} for company: ${companyName}`);
+
+        // Create contractor company
+        const contractorCompany = await storage.createCompany({
+          name: companyName,
+          shortName: contractorShortName,
+          businessNumber: businessNumber || null,
+          website: website || companyWebsite || null,
+          streetAddress,
+          city,
+          province,
+          country,
+          postalCode,
+          phone: phone || null,
+          isContractor: true,
+          serviceRegions: serviceRegions || [],
+          supportedActivities: supportedActivities || [],
+          capitalRetrofitTechnologies: capitalRetrofitTechnologies || []
+        });
+
+        // Update user with contractor company association
+        user = await storage.updateUser(user.id, {
+          companyId: contractorCompany.id,
+          role: "contractor_individual" as const
+        });
+
+        console.log(`[CONTRACTOR REGISTRATION] Created contractor company: ${contractorCompany.id} for user: ${user.id}`);
+        
+        // For contractors, set session to log them in immediately
+        (req.session as any).userId = user.id;
+        console.log(`[CONTRACTOR REGISTRATION] Set session for user: ${user.id}`);
+        
+        // Send confirmation email in background (not blocking)
+        sendEmailVerificationEmail(email, firstName, emailVerificationToken).catch(error => {
+          console.error(`[CONTRACTOR REGISTRATION] Failed to send confirmation email to ${email}:`, error);
+        });
+        
+        console.log(`[CONTRACTOR REGISTRATION] Returning immediate login response for contractor`);
+        return res.status(201).json({
+          message: "Registration successful! Welcome to your contractor dashboard.",
+          user: {
+            id: user.id,
+            email: user.email,
+            firstName: user.firstName,
+            lastName: user.lastName,
+            role: user.role,
+            companyId: user.companyId,
+            twoFactorEnabled: user.twoFactorEnabled || false
+          },
+          requiresEmailVerification: false,
+          redirectTo: "/contractor-dashboard"
+        });
+      }
+
+      // If company owner, validate terms and create company
+      if (isCompanyOwner) {
+
+        
+        // Check if user is email verified (either from session or database)
+        if (!user.isEmailVerified) {
+          return res.status(400).json({ 
+            message: "Email verification is required for company owner registration" 
+          });
+        }
+
+        // Validate required fields for company owners
+        if (!companyName || !companyShortName || !businessNumber || 
+            !streetAddress || !city || !province || !country || !postalCode || !howHeardAbout) {
+          return res.status(400).json({ 
+            message: "All business information fields are required for company owners" 
+          });
+        }
+
+        // Validate terms and conditions
+        if (!agreeToPortalServices || !agreeToBusinessInfo || !agreeToContact) {
+          return res.status(400).json({ 
+            message: "You must agree to all terms and conditions to register as a company owner" 
+          });
+        }
+
+        // Check if company short name already exists
+        const existingCompany = await storage.getCompanyByShortName(companyShortName);
+        let finalShortName = companyShortName;
+        
+        if (existingCompany) {
+          // Generate a unique short name by appending a number
+          let counter = 2;
+          do {
+            finalShortName = `${companyShortName.substring(0, 5)}${counter}`;
+            const checkCompany = await storage.getCompanyByShortName(finalShortName);
+            if (!checkCompany) break;
+            counter++;
+          } while (counter < 100);
+          
+          if (counter >= 100) {
+            return res.status(400).json({ 
+              message: "Unable to generate unique company identifier. Please contact support." 
+            });
+          }
+        }
+
+        const company = await storage.createCompany({
+          name: companyName,
+          shortName: finalShortName,
+          businessNumber,
+          website: companyWebsite || null,
+          streetAddress,
+          city,
+          province,
+          country,
+          postalCode,
+          howHeardAbout,
+          howHeardAboutOther: howHeardAbout === "other" ? howHeardAboutOther : null
+        });
+
+        // Update user with company association and verified status
+        user = await storage.updateUser(user.id, {
+          companyId: company.id,
+          role: "company_admin" as const,
+          isEmailVerified: true,
+          emailVerifiedAt: new Date()
+        });
+      }
+
+      // For company owners with verified emails, log them in immediately
+      if (isCompanyOwner && user.isEmailVerified) {
+        // Set session to log user in
+        (req.session as any).userId = user.id;
+        
+        return res.status(201).json({
+          message: "Registration successful! Welcome to your dashboard.",
+          user: {
+            id: user.id,
+            email: user.email,
+            firstName: user.firstName,
+            lastName: user.lastName,
+            role: user.role,
+            companyId: user.companyId,
+            twoFactorEnabled: user.twoFactorEnabled || false
+          },
+          requiresEmailVerification: false
+        });
+      }
+
+      // Send verification email for non-verified users
       const emailSent = await sendEmailVerificationEmail(email, firstName, emailVerificationToken);
       
       if (!emailSent) {
@@ -119,15 +425,25 @@ export function setupAuth(app: Express) {
   app.post("/api/auth/login", async (req: Request, res: Response) => {
     try {
       const { email, password, twoFactorToken } = req.body;
+      console.log(`[LOGIN] Attempting login for email: ${email}`);
 
       const user = await storage.getUserByEmail(email);
       if (!user || !user.password) {
+        console.log(`[LOGIN] User not found or no password for email: ${email}`);
         return res.status(401).json({ message: "Invalid email or password" });
       }
 
-      const isValidPassword = await comparePasswords(password, user.password);
-      if (!isValidPassword) {
-        return res.status(401).json({ message: "Invalid email or password" });
+      console.log(`[LOGIN] User found: ${user.id}, role: ${user.role}, passwordLength: ${user.password?.length}`);
+
+      try {
+        const isValidPassword = await comparePasswords(password, user.password);
+        console.log(`[LOGIN] Password validation result: ${isValidPassword}`);
+        if (!isValidPassword) {
+          return res.status(401).json({ message: "Invalid email or password" });
+        }
+      } catch (passwordError) {
+        console.error(`[LOGIN] Password comparison error for ${email}:`, passwordError);
+        return res.status(500).json({ message: "Failed to log in" });
       }
 
       // Check if email is verified
@@ -321,37 +637,49 @@ export function setupAuth(app: Express) {
   app.post("/api/auth/verify-code", async (req: Request, res: Response) => {
     try {
       const { email, code } = req.body;
+      console.log(`[EMAIL VERIFICATION] Starting verification for email: ${email} with code: ${code}`);
 
       if (!email || !code) {
+        console.log("[EMAIL VERIFICATION] Missing email or code");
         return res.status(400).json({ message: "Email and verification code are required" });
       }
 
       // Find user by email and verification token
       const user = await storage.getUserByEmail(email);
       if (!user) {
+        console.log(`[EMAIL VERIFICATION] User not found for email: ${email}`);
         return res.status(400).json({ message: "User not found" });
       }
 
+      console.log(`[EMAIL VERIFICATION] User found: ${user.id}, current verification status: ${user.isEmailVerified}`);
+      console.log(`[EMAIL VERIFICATION] Expected token: ${user.emailVerificationToken}, provided code: ${code}`);
+
       if (user.isEmailVerified) {
+        console.log("[EMAIL VERIFICATION] Email already verified");
         return res.status(400).json({ message: "Email is already verified" });
       }
 
       if (user.emailVerificationToken !== code) {
+        console.log(`[EMAIL VERIFICATION] Invalid verification code. Expected: ${user.emailVerificationToken}, Got: ${code}`);
         return res.status(400).json({ message: "Invalid verification code" });
       }
 
       // Check if token has expired
       if (user.verificationTokenExpiry && new Date() > user.verificationTokenExpiry) {
+        console.log("[EMAIL VERIFICATION] Verification code expired");
         return res.status(400).json({ message: "Verification code has expired. Please request a new one." });
       }
 
+      console.log("[EMAIL VERIFICATION] Updating user verification status");
       // Update user to mark email as verified and create session
-      await storage.updateUser(user.id, {
+      const updatedUser = await storage.updateUser(user.id, {
         isEmailVerified: true,
         emailVerifiedAt: new Date(),
         emailVerificationToken: null,
         verificationTokenExpiry: null
       });
+
+      console.log(`[EMAIL VERIFICATION] User updated, new verification status: ${updatedUser.isEmailVerified}`);
 
       // Log the user in by creating a session
       (req.session as any).userId = user.id;
@@ -362,7 +690,8 @@ export function setupAuth(app: Express) {
       res.status(200).json({ 
         message: "Email verified successfully! Welcome to SEMI Program Portal.",
         user: verifiedUser,
-        verified: true
+        verified: true,
+        redirectTo: verifiedUser?.role === "contractor_individual" ? "/contractor-dashboard" : "/"
       });
     } catch (error) {
       console.error("Email verification error:", error);
@@ -403,6 +732,94 @@ export function setupAuth(app: Express) {
     } catch (error) {
       console.error("Email verification error:", error);
       res.status(500).json({ message: "Failed to verify email" });
+    }
+  });
+
+  // Send verification code for registration (before user exists)
+  app.post("/api/auth/send-registration-verification", async (req: Request, res: Response) => {
+    try {
+      const { email } = req.body;
+
+      if (!email) {
+        return res.status(400).json({ message: "Email is required" });
+      }
+
+      // Check if user already exists
+      const existingUser = await storage.getUserByEmail(email);
+      if (existingUser) {
+        return res.status(400).json({ message: "User with this email already exists" });
+      }
+
+      // Generate verification code
+      const verificationCode = Math.floor(100000 + Math.random() * 900000).toString();
+
+
+      
+      // Store the verification code temporarily (in session or cache)
+      (req.session as any).registrationVerification = {
+        email,
+        code: verificationCode,
+        expires: Date.now() + 10 * 60 * 1000 // 10 minutes
+      };
+
+      // Send verification email
+      const emailSent = await sendEmailVerificationEmail(email, "User", verificationCode);
+      
+      if (emailSent) {
+        res.status(200).json({ message: "Verification code sent successfully" });
+      } else {
+        res.status(500).json({ message: "Failed to send verification email" });
+      }
+    } catch (error) {
+      console.error("Send registration verification error:", error);
+      res.status(500).json({ message: "Failed to send verification code" });
+    }
+  });
+
+  // Verify registration code
+  app.post("/api/auth/verify-registration-code", async (req: Request, res: Response) => {
+    try {
+      const { email, code } = req.body;
+
+      if (!email || !code) {
+        return res.status(400).json({ message: "Email and verification code are required" });
+      }
+
+      const registrationData = (req.session as any)?.registrationVerification;
+      
+      if (!registrationData) {
+        return res.status(400).json({ message: "No verification session found" });
+      }
+
+      if (registrationData.email !== email) {
+        return res.status(400).json({ message: "Email does not match verification session" });
+      }
+
+      if (Date.now() > registrationData.expires) {
+        return res.status(400).json({ message: "Verification code has expired" });
+      }
+
+      if (registrationData.code !== code) {
+        return res.status(400).json({ message: "Invalid verification code" });
+      }
+
+      // Mark as verified in session
+      (req.session as any).emailVerified = email;
+      
+      // Check if user already exists and update their verification status
+      const existingUser = await storage.getUserByEmail(email);
+      if (existingUser) {
+        await storage.updateUser(existingUser.id, {
+          isEmailVerified: true,
+          emailVerifiedAt: new Date()
+        });
+
+      }
+      
+      res.status(200).json({ message: "Email verified successfully" });
+    } catch (error) {
+      console.error("Verify registration code error:", error);
+      res.status(500).json({ message: "Failed to verify code" });
     }
   });
 
@@ -537,12 +954,18 @@ export function setupAuth(app: Express) {
 export const requireAuth = async (req: Request, res: Response, next: NextFunction) => {
   try {
     const userId = (req.session as any)?.userId;
+    console.log('Auth middleware - userId from session:', userId, 'path:', req.path);
+    
     if (!userId) {
+      console.log('No userId in session');
       return res.status(401).json({ message: "Authentication required" });
     }
 
-    const user = await storage.getUser(userId);
+    const user = await storage.getUserById(userId);
+    console.log('Auth middleware - user found:', user?.email, 'role:', user?.role);
+    
     if (!user) {
+      console.log('User not found in database');
       return res.status(401).json({ message: "User not found" });
     }
 

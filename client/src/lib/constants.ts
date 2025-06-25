@@ -1,45 +1,38 @@
 export const ACTIVITY_TYPES = {
   FRA: {
     code: "1",
-    name: "Facility Readiness Assessment",
-    description: "Initial assessment required for all facilities",
+    name: "Facility Readiness Assessment (FRA)",
+    description: "Activity 1 - Facility Readiness Assessment",
     color: "blue",
     icon: "F"
   },
-  CES: {
-    code: "2", 
-    name: "Comprehensive Energy Study",
-    description: "Detailed energy analysis and recommendations",
+  EAA: {
+    code: "2",
+    name: "Energy Assessments and Audits (EAA)",
+    description: "Activity 2 - Energy Assessments and Audits",
     color: "teal",
-    icon: "C"
+    icon: "A"
   },
   SEM: {
     code: "3",
-    name: "Strategic Energy Manager", 
-    description: "Advanced energy management support",
+    name: "Strategic Energy Manager (SEM)", 
+    description: "Activity 3 - Strategic Energy Manager",
     color: "purple",
     icon: "S"
   },
   EMIS: {
     code: "4",
-    name: "Energy Management Information System",
-    description: "Data tracking and analysis systems",
+    name: "Energy Management Information Systems (EMIS)",
+    description: "Activity 4 - Energy Management Information Systems",
     color: "indigo", 
     icon: "E"
   },
   CR: {
     code: "5",
-    name: "Capital Retrofit",
-    description: "Equipment upgrades and improvements",
+    name: "Capital Retrofits (CR)",
+    description: "Activity 5 - Capital Retrofits",
     color: "green",
     icon: "R"
-  },
-  EEA: {
-    code: "6",
-    name: "Energy Efficiency Alberta",
-    description: "Provincial efficiency programs",
-    color: "orange",
-    icon: "A"
   }
 } as const;
 
@@ -88,9 +81,19 @@ export const USER_ROLES = {
     permissions: ["create_applications", "upload_documents", "view_assigned_data"]
   },
   contractor_account_owner: {
-    label: "Contractor Owner",
+    label: "Contractor Account Owner",
     color: "purple", 
-    permissions: ["manage_contractor_team", "view_assigned_applications", "upload_documents"]
+    permissions: ["manage_contractor_team", "view_all_applications", "edit_all_applications", "assign_applications", "delete_managers"]
+  },
+  contractor_manager: {
+    label: "Contractor Manager",
+    color: "blue",
+    permissions: ["manage_contractor_team", "view_all_applications", "edit_all_applications", "assign_applications"]
+  },
+  contractor_team_member: {
+    label: "Contractor Team Member",
+    color: "green",
+    permissions: ["view_assigned_applications", "upload_documents"]
   },
   contractor_individual: {
     label: "Contractor",
@@ -188,9 +191,21 @@ export const NAVIGATION_ITEMS = [
 
 export const ADMIN_NAVIGATION_ITEMS = [
   {
-    name: "System Admin",
+    name: "Dashboard",
     href: "/admin",
-    icon: "Shield",
+    icon: "LayoutDashboard",
+    roles: ["system_admin"]
+  },
+  {
+    name: "Applications",
+    href: "/applications",
+    icon: "FileText",
+    roles: ["system_admin"]
+  },
+  {
+    name: "Approvals",
+    href: "/admin/approvals",
+    icon: "CheckCircle",
     roles: ["system_admin"]
   },
   {
@@ -200,15 +215,21 @@ export const ADMIN_NAVIGATION_ITEMS = [
     roles: ["system_admin"]
   },
   {
-    name: "Reports",
-    href: "/admin/reports", 
-    icon: "BarChart",
+    name: "Contractors",
+    href: "/contractors",
+    icon: "Users",
     roles: ["system_admin"]
   },
   {
-    name: "Export Data",
-    href: "/admin/export",
-    icon: "Download", 
+    name: "Ghost Application IDs",
+    href: "/admin/ghost-ids",
+    icon: "Database",
+    roles: ["system_admin"]
+  },
+  {
+    name: "Reports",
+    href: "/admin/reports", 
+    icon: "BarChart",
     roles: ["system_admin"]
   }
 ];

@@ -3,13 +3,24 @@ import { QueryClient, QueryFunction } from "@tanstack/react-query";
 async function throwIfResNotOk(res: Response) {
   if (!res.ok) {
     const text = (await res.text()) || res.statusText;
+    
+    // Handle authentication errors without redirecting for admin users
+    if (res.status === 401) {
+      console.warn('Authentication required, but continuing operation');
+      // Don't throw for 401s in admin context to prevent redirects
+      if (window.location.pathname.includes('/admin')) {
+        console.log('Admin context detected, not throwing 401 error');
+        return;
+      }
+    }
+    
     throw new Error(`${res.status}: ${text}`);
   }
 }
 
 export async function apiRequest(
-  method: string,
   url: string,
+  method: string,
   data?: unknown | undefined,
 ): Promise<Response> {
   const res = await fetch(url, {
@@ -47,11 +58,13 @@ export const queryClient = new QueryClient({
       queryFn: getQueryFn({ on401: "throw" }),
       refetchInterval: false,
       refetchOnWindowFocus: false,
-      staleTime: Infinity,
-      retry: false,
+      staleTime: 5 * 60 * 1000, // 5 minutes - allow some staleness for better performance
+      gcTime: 10 * 60 * 1000, // 10 minutes cache time
+      refetchOnMount: false, // Don't refetch on mount if data is fresh
+      retry: 1, // Retry once on failure
     },
     mutations: {
-      retry: false,
+      retry: 1, // Retry mutations once on failure
     },
   },
 });
